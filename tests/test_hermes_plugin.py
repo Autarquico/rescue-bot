@@ -214,4 +214,4 @@ def test_redact_is_linear_on_hostile_lines(plugin, line):
     redact = sys.modules["rescue_plugin.redact"].redact
     start = time.monotonic()
     redact(line)
-    assert time.monotonic() - start < 1
+    assert time.monotonic() - start < 5  # cúbico: minutos; lineal: ~0,1 s local, ~2 s en CI
