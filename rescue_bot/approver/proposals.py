@@ -132,10 +132,7 @@ class Approver:
         blocked = self._limiter.check(req.app)
         if blocked:
             self._audit.write("blocked_proposal", app=req.app, verb=req.verb, detail=blocked)
-            self._say(
-                channel,
-                f"Límite alcanzado en *{_esc(req.app)}* ({blocked}): intervención manual.",
-            )
+            # Solo auditoría: publicar aquí dejaría al agente inundar #rescue (SEC-6).
             return {"ok": False, "error": f"límite alcanzado: {blocked}; intervención manual"}
         now = self._clock()
         p = Proposal(

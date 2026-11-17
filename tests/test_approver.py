@@ -139,7 +139,15 @@ def test_fourth_action_in_an_hour_is_blocked(env):
     reply = env.approver.submit(b'{"app":"example","verb":"restart","reason":"x"}')
     assert reply["ok"] is False and "manual" in reply["error"]
     assert env.slack.buttons() == []
-    assert "manual" in env.slack.posted[-1]["text"]
+    assert env.slack.posted == []
+    assert env.events()[-1] == "blocked_proposal"
+
+
+def test_blocked_proposals_never_post_to_slack(env):
+    _executed(env, 100)
+    assert not any(env.approver.submit(
+        b'{"app":"example","verb":"restart","reason":"x"}')["ok"] for _ in range(500))  # fmt: skip
+    assert env.slack.posted == []
 
 
 def test_action_within_min_interval_is_blocked(env):

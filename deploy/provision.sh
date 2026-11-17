@@ -26,12 +26,21 @@ CONFIG=/etc/rescue-bot/config
 AGENT_HOME=/var/lib/rescue-agent
 HERMES_SPEC="${HERMES_SPEC:-hermes-agent @ git+https://github.com/NousResearch/hermes-agent@v2026.6.5}"
 DEPLOY_KEY=/root/.ssh/config_deploy_key
+GITHUB_KNOWN_HOSTS=/root/.ssh/known_hosts_github
+GITHUB_ED25519_FINGERPRINT="SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
 
 echo "== paquetes"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq git curl ca-certificates unattended-upgrades openssh-client
 systemctl enable --now unattended-upgrades
+
+echo "== IPv6 desactivada (el CT no debe alcanzar la LAN ni Proxmox por IPv6)"
+cat >/etc/sysctl.d/90-rescue.conf <<'SYSCTL'
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+SYSCTL
+sysctl --system >/dev/null
 
 echo "== tailscale"
 if ! command -v tailscale >/dev/null; then
@@ -70,8 +79,17 @@ chmod -R go+rX,go-w "$CODE" /opt/uv-python 2>/dev/null || true
 
 echo "== configuración privada en $CONFIG"
 install -d -m 0755 /etc/rescue-bot
-export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
-[[ -f "$DEPLOY_KEY" ]] && GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+# Host keys de github.com fijadas: se obtienen con ssh-keyscan y se comparan con la huella ed25519 publicada.
+install -d -m 0700 /root/.ssh
+scanned="$(ssh-keyscan -t ed25519 github.com 2>/dev/null)"
+fingerprint="$(ssh-keygen -lf <(printf '%s\n' "$scanned") 2>/dev/null | awk '{print $2}')"
+[[ "$fingerprint" == "$GITHUB_ED25519_FINGERPRINT" ]] \
+  || { echo "huella de host de github.com inesperada ('${fingerprint:-vacía}'); abortando" >&2; exit 1; }
+printf '%s\n' "$scanned" >"$GITHUB_KNOWN_HOSTS"
+chmod 0644 "$GITHUB_KNOWN_HOSTS"
+GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$GITHUB_KNOWN_HOSTS"
+[[ -f "$DEPLOY_KEY" ]] && GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$GITHUB_KNOWN_HOSTS"
+export GIT_SSH_COMMAND
 if [[ -d "$CONFIG/.git" ]]; then
   git -C "$CONFIG" pull --ff-only --quiet
 else

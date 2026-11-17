@@ -131,6 +131,8 @@ def desired_files(app: App, config: Path) -> dict[str, tuple[str, str]]:
     }
 
 
+RW_PROBE_VERB = "probe-rw"  # reservado en vm/rescue-shell
+
 ROOT_ONLY_FN = r"""
 root_only() {  # root_only <ruta>: la ruta y cada directorio hasta / son de root y sin g/o-w
   local p=$1
@@ -153,8 +155,29 @@ def sudo_executables(actions: Sequence[Action]) -> list[str]:
     return sorted({a.argv[0] for a in actions if a.sudo})
 
 
+def sudo_paths(actions: Sequence[Action]) -> list[str]:
+    """argv[0] y todo argumento absoluto de las acciones sudo: root los ejecuta o los lee."""
+    return sorted(
+        {
+            arg
+            for act in actions
+            if act.sudo
+            for arg in act.argv
+            if arg == act.argv[0] or arg.startswith("/")
+        }
+    )
+
+
 def _sudo_guard(actions: Sequence[Action]) -> str:
-    return "".join(f"root_only_real {shlex.quote(exe)}\n" for exe in sudo_executables(actions))
+    exes = set(sudo_executables(actions))
+    lines = []
+    for path in sudo_paths(actions):
+        q = shlex.quote(path)
+        # argv[0] debe existir (aborta si no); un argumento absoluto solo se exige si existe.
+        lines.append(
+            f"root_only_real {q}\n" if path in exes else f"[ ! -e {q} ] || root_only_real {q}\n"
+        )
+    return "".join(lines)
 
 
 def _compose_guard(directory: str) -> str:
@@ -248,17 +271,20 @@ def diff_remote(app: App, config: Path, files: dict[str, tuple[str, str]], runne
 
 
 def verify(app: App, config: Path, key_ro: Path, run: Callable[..., Result] = run_verb) -> None:
-    """Sin cambios remotos: un verbo ro debe funcionar y todo verbo rw ser rechazado (64)."""
+    """Sin cambios remotos: un verbo ro funciona y la clave ro es rechazada (64) en el sondeo rw.
+
+    La clave rw no se usa nunca y ningún verbo rw del catálogo se lanza: el sondeo es un verbo
+    reservado de rescue-shell que no ejecuta nada.
+    """
     hosts = known_hosts(config)
     ro_verbs = app.verbs("ro")
     if not ro_verbs:
         raise EnrollError("verificación: la app no tiene verbos ro")
     if not run(app, ro_verbs[0], key_ro, hosts).ok:
         raise EnrollError(f"verificación: `{ro_verbs[0]}` con la clave ro falló")
-    for verb in app.verbs("rw"):
-        attempt = run(app, verb, key_ro, hosts)
-        if attempt.ok or attempt.code != 64:
-            raise EnrollError(f"verificación: `{verb}` con la clave ro NO fue rechazado")
+    attempt = run(app, RW_PROBE_VERB, key_ro, hosts)
+    if attempt.ok or attempt.code != 64:
+        raise EnrollError("verificación: la clave ro NO fue rechazada en el sondeo rw")
 
 
 def enroll(

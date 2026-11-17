@@ -11,12 +11,14 @@ _PATTERNS = [
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S
     ),
     re.compile(r"(?i)\b(authorization\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?[^\s\"']+"),
+    re.compile(r"(?i)\b((?:set-)?cookie\s*:\s*)[^\r\n]+"),
     re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(
-        r"(?i)([\w.-]*(?:password|passwd|secret|token|api[_-]?key)[\w.-]*[\"']?\s*[=:]\s*)"
+        r"(?i)([\w.-]*(?:(?<![a-z])pass|pwd|credential|private[_-]?key|secret|token|api[_-]?key)"
+        r"[\w.-]*[\"']?\s*[=:]\s*)"
         r"(?:\"[^\"]*\"|'[^']*'|\S+)"
     ),
-    re.compile(r"(\b[A-Za-z][\w+.-]*://[^:/\s@]+:)[^@\s/]+(@)"),
+    re.compile(r"(\b[A-Za-z][\w+.-]*://[^:/\s@]*:)[^@\s/]+(@)"),
     re.compile(r"\bxox[abpr]-[A-Za-z0-9-]{8,}"),
     re.compile(r"\bxapp-[A-Za-z0-9-]{8,}"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),

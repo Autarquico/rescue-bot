@@ -5,11 +5,12 @@ set -euo pipefail
 
 CONFIG=/etc/rescue-bot/config
 DEPLOY_KEY=/root/.ssh/config_deploy_key
+KNOWN_HOSTS=/root/.ssh/known_hosts_github
 
 [[ $EUID -eq 0 ]] || { echo "ejecuta como root" >&2; exit 1; }
 [[ $# -eq 0 ]] || { echo "uso: rescue-reload" >&2; exit 2; }
 
-GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes" git -C "$CONFIG" pull --ff-only
+GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS" git -C "$CONFIG" pull --ff-only
 chown -R root:root "$CONFIG"
 chmod -R u=rwX,go=rX "$CONFIG"
 systemctl restart rescue-approver hermes-gateway

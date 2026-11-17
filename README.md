@@ -47,7 +47,7 @@ Datos hacia el modelo: los logs de diagnóstico van al proveedor del modelo con 
 
 ## Quickstart de despliegue
 
-1. **Crear el CT** (en devsrv02, como root): `deploy/create-ct.sh [CTID]` (por defecto 120) `[LAN_GATEWAY]` (por defecto 192.168.0.1). Activa el firewall de Proxmox en el CT (`/etc/pve/firewall/<CTID>.fw`); para que se aplique, el firewall del datacenter debe estar activado (`pve-firewall` en marcha y `enable: 1` en `/etc/pve/firewall/cluster.fw`). El script no lo activa ni cambia la política del datacenter (`policy_in` sigue ACCEPT salvo que ya la hayas cambiado), para no afectar a otros invitados. Sin SSH entrante salvo `MGMT_CIDR=<cidr>`; se entra por Tailscale o `pct exec`.
+1. **Crear el CT** (en devsrv02, como root): `deploy/create-ct.sh [CTID]` (por defecto 120) `[LAN_GATEWAY]` (por defecto 192.168.0.1). Activa el firewall de Proxmox en el CT (`/etc/pve/firewall/<CTID>.fw`: salida bloqueada a RFC1918, `fe80::/10`, `fc00::/7` y las direcciones IPv6 del nodo) y crea `net0` sin `ip6`; `provision.sh` desactiva IPv6 en el CT (`/etc/sysctl.d/90-rescue.conf`). Si el firewall del datacenter no está activado (`enable: 1` en `/etc/pve/firewall/cluster.fw`) o `net0` no tiene `firewall=1`, el script termina con error. `--enable-datacenter-firewall` activa el del datacenter solo si su `policy_in` es ACCEPT o no está definida; si no, imprime `[OPTIONS]` y se niega (no cambia nunca la política). Sin SSH entrante salvo `MGMT_CIDR=<cidr>`; se entra por Tailscale o `pct exec`.
 2. **Provisionar** (dentro del CT, como root):
    ```
    /root/.ssh/config_deploy_key   # deploy key de SOLO LECTURA del repo privado de configuración (0600)
@@ -77,8 +77,9 @@ En las VMs, el usuario `rescue` tiene shell `/bin/bash`: el `command=` forzado l
 
 Lo implementa cada app; el bot solo lo invoca.
 
-- Tras un despliegue con la salud en verde, el CI/despliegue guarda la versión (etiqueta, imagen o commit) en `/srv/<app>/.last-good`.
-- `/srv/<app>/bin/rollback-to-last-good` vuelve a esa versión y devuelve 0 solo si la app pasa después su comprobación de salud.
+- Tras un despliegue con la salud en verde, el CI/despliegue guarda la versión (etiqueta, imagen o commit) en `/var/lib/<app>/last-good`, fuera del ejecutable.
+- `rollback_cmd` apunta a un script de root (p. ej. `/usr/local/lib/<app>/rollback-to-last-good`, 0755) que vuelve a esa versión y devuelve 0 solo si la app pasa después su comprobación de salud. Ese script lee `last-good` como dato y valida su formato antes de usarlo.
+- enroll aborta si el ejecutable, cualquier argumento con ruta absoluta o alguno de sus directorios padre no es de root o es escribible por grupo u otros: lo que corre con sudo no puede estar en manos de la app.
 - Una app sin este contrato no declara `rollback`.
 
 ## Desarrollo

@@ -109,6 +109,19 @@ def test_remote_script_checks_ownership_of_every_sudo_executable(config):
     assert tail.index("root_only_real /usr/lib/rescue") < tail.index(enroll.KEYS_PATH)
 
 
+def test_sudo_guard_covers_absolute_path_arguments():
+    from rescue_bot.presets import Action
+
+    acts = [
+        Action("fix", "rw", ("/bin/bash", "/srv/x/fix.sh", "--flag", "rel"), True),
+        Action("st", "ro", ("/srv/y/untouched.sh", "/srv/y/data"), False),
+    ]
+    guard = enroll._sudo_guard(acts)
+    assert "root_only_real /bin/bash\n" in guard
+    assert "[ ! -e /srv/x/fix.sh ] || root_only_real /srv/x/fix.sh\n" in guard
+    assert "--flag" not in guard and "rel" not in guard and "/srv/y" not in guard
+
+
 def test_apply_declined_changes_nothing(config):
     runner = FakeRunner()
     with pytest.raises(enroll.EnrollError):
@@ -121,13 +134,15 @@ def test_verify_only_makes_no_remote_changes(config, capsys):
     key = config / "keys" / "key_ro"
     calls = []
 
-    def fake(_app, verb, _key, _hosts):
-        calls.append(verb)
+    def fake(_app, verb, used_key, _hosts):
+        calls.append((verb, used_key))
         return Result(True, 0, "") if verb == "status" else Result(False, 64, "")
 
     app = load_app(config / "apps" / "example.yaml")
     enroll.verify(app, config, key, fake)
-    assert calls == [*app.verbs("ro")[:1], *app.verbs("rw")]
+    # solo la clave ro y ningún verbo rw del catálogo: el rw se sondea con el verbo reservado
+    assert calls == [(app.verbs("ro")[0], key), (enroll.RW_PROBE_VERB, key)]
+    assert not set(app.verbs("rw")) & {verb for verb, _ in calls}
 
 
 def test_verify_only_flag_requires_key(config):

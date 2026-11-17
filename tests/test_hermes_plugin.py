@@ -167,11 +167,17 @@ def test_request_action_without_socket_returns_error(tools, monkeypatch, tmp_pat
         "apikey=hunter2",
         "DATABASE_URL=postgres://app:hunter2@db:5432/app",
         "https://user:hunter2@example.com/x",
+        "redis://:hunter2@cache:6379/0",
+        "DB_PASS=hunter2",
+        "pwd=hunter2",
+        "Cookie: session=hunter2",
+        "Set-Cookie: sid=hunter2; HttpOnly",
+        "authorization: hunter2",
     ],
 )
 def test_redact_masks(plugin, secret):
     redact = sys.modules["rescue_plugin.redact"].redact
-    out = redact(f"antes {secret} después")
+    out = redact(f"antes\n{secret}\ndespués")
     assert "[REDACTED]" in out and "antes" in out and "después" in out
     for fragment in ("hunter2", "s3cr3t", "abcdef0123456789", "IOSFODNN7", "abc\ndef"):
         assert fragment not in out
@@ -181,6 +187,16 @@ def test_redact_keeps_url_host_and_user(plugin):
     redact = sys.modules["rescue_plugin.redact"].redact
     out = redact("postgres://app:hunter2@db:5432/app")
     assert out == "postgres://app:[REDACTED]@db:5432/app"
+
+
+def test_redact_keeps_empty_user_url_shape(plugin):
+    redact = sys.modules["rescue_plugin.redact"].redact
+    assert redact("redis://:hunter2@cache:6379/0") == "redis://:[REDACTED]@cache:6379/0"
+
+
+def test_redact_does_not_touch_bypass_or_compass(plugin):
+    redact = sys.modules["rescue_plugin.redact"].redact
+    assert redact("bypass=1 compass=north") == "bypass=1 compass=north"
 
 
 def test_redact_keeps_plain_text(plugin):

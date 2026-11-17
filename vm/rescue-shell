@@ -11,14 +11,14 @@
 # (sin espacios dentro de un token), líneas `#` de comentario.
 #
 # El 2º argumento existe para los tests. RESCUE_SHELL_TESTING=1 relaja la
-# comprobación de propietario root; sshd con `restrict` no deja al cliente fijar
-# variables de entorno, así que no es alcanzable desde la clave.
+# comprobación de propietario root. BASH_ENV/ENV no llegan: sshd solo acepta variables del
+# cliente con AcceptEnv (no se configura) y `restrict` desactiva ~/.ssh/environment y
+# PermitUserEnvironment. Lo que sí garantiza el entorno limpio del comando es `env -i` abajo.
 #
 # Salida: 64 = rechazado (nada se ejecutó), 70 = catálogo no fiable o sin timeout;
 # en otro caso, el código de salida del comando.
 
 set -u
-unset BASH_ENV ENV
 export LC_ALL=C
 
 readonly MAX_OUTPUT=65536
@@ -48,6 +48,13 @@ fail() { # fail <código> <mensaje>
 
 [[ $key_mode == ro || $key_mode == rw ]] || fail 64 "modo de clave inválido"
 [[ $verb != *$'\n'* && $verb =~ $VERB_RE ]] || fail 64 "verbo inválido"
+
+# Sondeo de `rescue-verify`: comprueba el modo de la clave sin ejecutar nada.
+if [[ $verb == probe-rw ]]; then
+  [[ $key_mode == rw ]] || fail 64 "verbo de escritura con clave de solo lectura"
+  echo "probe-rw ok"
+  exit 0
+fi
 
 [[ -f $conf ]] || fail 70 "catálogo no encontrado"
 read -r perms owner < <(stat -c '%a %u' "$conf" 2>/dev/null || stat -f '%Lp %u' "$conf" 2>/dev/null)

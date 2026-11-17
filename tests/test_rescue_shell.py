@@ -69,6 +69,12 @@ def test_rw_verb_with_ro_key_is_rejected_and_not_executed(env):
     assert not env[2].exists()
 
 
+def test_probe_rw_is_rejected_with_ro_key_and_runs_nothing_with_rw_key(env):
+    assert run(env, "ro", "probe-rw").returncode == 64
+    r = run(env, "rw", "probe-rw")
+    assert r.returncode == 0 and not env[2].exists()
+
+
 @pytest.mark.parametrize(
     "verb",
     ["rm", "status; id", "$(id)", "", "status\n", "status ", "Status", "a" * 40, "-status"],
@@ -125,5 +131,4 @@ def test_client_environment_does_not_reach_the_command(env):
 
 def test_script_pins_timeout_kill_and_scrubs_env():
     text = SHELL.read_text()
-    assert "unset BASH_ENV ENV" in text
     assert "-k 5" in text and "env -i" in text
