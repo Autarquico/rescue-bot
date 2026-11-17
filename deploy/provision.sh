@@ -124,9 +124,10 @@ export UV_TOOL_DIR=/opt/hermes UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_INSTALL_
 uv tool install --force "$HERMES_SPEC" --with "$CODE"
 chmod -R go+rX,go-w /opt/hermes /opt/uv-python 2>/dev/null || true
 
-# $AGENT_HOME y .hermes son de root: el agente no puede renombrar ni sustituir plugin/config.
-# Solo los subdirectorios de estado son suyos.
-install -d -m 0755 -o root -g root "$AGENT_HOME" "$AGENT_HOME/.hermes" "$AGENT_HOME/.hermes/plugins"
+# Hermes escribe su estado en la raíz de .hermes (state.db, platforms/, cron/…): root:agent 1775.
+# El bit sticky impide al agente borrar o renombrar lo que es de root (config.yaml, SOUL.md, plugins/).
+install -d -m 0755 -o root -g root "$AGENT_HOME" "$AGENT_HOME/.hermes/plugins"
+install -d -m 1775 -o root -g agent "$AGENT_HOME/.hermes"
 for d in sessions logs memories cache workspace; do
   install -d -m 0700 -o agent -g agent "$AGENT_HOME/.hermes/$d"
 done

@@ -20,8 +20,8 @@ RestartSec=5
 
 NoNewPrivileges=yes
 ProtectSystem=strict
-# Solo los subdirectorios de estado (propiedad de agent, creados por provision.sh); el resto es de root.
-ReadWritePaths=/var/lib/rescue-agent/.hermes/sessions /var/lib/rescue-agent/.hermes/logs /var/lib/rescue-agent/.hermes/memories /var/lib/rescue-agent/.hermes/cache /var/lib/rescue-agent/.hermes/workspace
+# .hermes es root:agent 1775 (sticky): config.yaml, SOUL.md y plugins/ siguen siendo de root.
+ReadWritePaths=/var/lib/rescue-agent/.hermes
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
