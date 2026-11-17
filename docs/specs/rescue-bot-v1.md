@@ -2,12 +2,12 @@
 codename: rescue-bot
 title: rescue-bot v1 — rescate de apps desde Slack
 type: epic
-status: draft
+status: active
 priority: P1
 size: L
 issue: null
 prs: []
-related_issues: []
+related_issues: [1]
 depends_on: []
 supersedes: []
 related_specs: []
