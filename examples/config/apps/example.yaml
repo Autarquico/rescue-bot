@@ -1,0 +1,7 @@
+name: example
+url: https://example.invalid
+health: { url: https://example.invalid/healthz, expect: 200 }
+ssh: { host: example.example.ts.net, user: rescue, admin: root }
+preset: { kind: systemd, unit: example.service }
+rollback_cmd: /srv/example/bin/rollback-to-last-good   # opcional, ver contrato de rollback
+runbook: runbooks/example.md
