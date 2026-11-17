@@ -10,7 +10,8 @@
 # Tailscale va encapsulado por Internet, así que sigue funcionando.
 # REQUISITO: cortafuegos del datacenter activado (`enable: 1` en [OPTIONS] de /etc/pve/firewall/cluster.fw).
 # Si no lo está el script TERMINA con error (exit 1). Con --enable-datacenter-firewall lo activa, pero solo si
-# policy_in del datacenter es ACCEPT o no está definida (si no, imprime [OPTIONS] y se niega).
+# policy_in/policy_out del datacenter son ACCEPT o no están definidas; las fija a ACCEPT explícito, porque sin
+# definir Proxmox aplica DROP a los nodos (si no, imprime [OPTIONS] y se niega).
 # Si net0 no tiene firewall=1 tras configurar, también termina con error.
 # Uso: create-ct.sh [--enable-datacenter-firewall] [CTID] [LAN_GATEWAY]
 set -euo pipefail
@@ -44,26 +45,20 @@ cluster_options() { awk '/^\[/{s=$0; next} s=="[OPTIONS]" && NF' "$CLUSTER_FW" 2
 datacenter_firewall_enabled() { cluster_options | grep -q '^enable: *1'; }
 
 enable_datacenter_firewall() {
-  local policy
-  policy="$(cluster_options | sed -n 's/^policy_in: *//p' | tr -d '[:space:]')"
-  if [[ -n "$policy" && "$policy" != ACCEPT ]]; then
-    echo "[OPTIONS] actuales de $CLUSTER_FW:" >&2
-    cluster_options >&2
-    die "policy_in del datacenter es '$policy' (no ACCEPT): activarlo cortaría el tráfico de otros invitados/nodo. Actívalo a mano tras revisar sus reglas."
-  fi
-  mkdir -p /etc/pve/firewall
-  if [[ ! -f "$CLUSTER_FW" ]] || ! grep -q '^\[OPTIONS\]' "$CLUSTER_FW"; then
-    { printf '[OPTIONS]\nenable: 1\n\n'; cat "$CLUSTER_FW" 2>/dev/null || true; } >"${CLUSTER_FW}.new"
-  else
-    awk '
-      /^\[/ { if (inopt && !done) { print "enable: 1"; done=1 } inopt = ($0=="[OPTIONS]") }
-      inopt && /^enable:/ { if (!done) print "enable: 1"; done=1; next }
-      { print }
-      END { if (inopt && !done) print "enable: 1" }
-    ' "$CLUSTER_FW" >"${CLUSTER_FW}.new"
-  fi
-  mv "${CLUSTER_FW}.new" "$CLUSTER_FW"
-  echo "cortafuegos del datacenter activado (policy_in=${policy:-sin definir})"
+  # Con enable: 1 y policy_in sin definir, Proxmox aplica DROP a los nodos (solo LAN→8006/22 pasa):
+  # se cortarían Tailscale, PBS y cualquier otro servicio del nodo. Por eso se fijan ACCEPT explícitos,
+  # que dejan nodos e invitados como estaban; solo el CT (firewall=1 en net0) recibe reglas.
+  local key value
+  for key in policy_in policy_out; do
+    value="$(cluster_options | sed -n "s/^$key: *//p" | tr -d '[:space:]')"
+    if [[ -n "$value" && "$value" != ACCEPT ]]; then
+      echo "[OPTIONS] actuales de $CLUSTER_FW:" >&2
+      cluster_options >&2
+      die "$key del datacenter es '$value': actívalo a mano tras revisar sus reglas."
+    fi
+  done
+  pvesh set /cluster/firewall/options --policy_in ACCEPT --policy_out ACCEPT --enable 1
+  echo "cortafuegos del datacenter activado con policy_in/policy_out ACCEPT explícitos"
 }
 
 ensure_datacenter_firewall() {
