@@ -17,6 +17,7 @@ WorkingDirectory=/var/lib/rescue-agent/.hermes/workspace
 ExecStart=/usr/local/bin/hermes gateway
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=210
 
 NoNewPrivileges=yes
 ProtectSystem=strict
