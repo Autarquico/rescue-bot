@@ -20,6 +20,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$REPO" && -n "$CONFIG_REPO" ]] || { echo "uso: $0 --repo URL --config-repo URL [--ref main]" >&2; exit 2; }
 [[ $EUID -eq 0 ]] || { echo "ejecuta como root" >&2; exit 1; }
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin  # pct exec no incluye /usr/local
 
 CODE=/opt/rescue-bot
 CONFIG=/etc/rescue-bot/config
