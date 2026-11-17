@@ -1,0 +1,26 @@
+codename: rescue-bot
+display_name: Rescue-bot
+github:
+  repo: autarquico/rescue-bot
+  project:
+    owner: autarquico
+    owner_type: org
+    number: 8
+  field_ids:
+    status: PVTSSF_lADODyLb1M4Br-e4zhqOrHY
+    priority: PVTSSF_lADODyLb1M4Br-e4zhqOrJk
+    size: PVTSSF_lADODyLb1M4Br-e4zhqOrJo
+    ticket_type: PVTSSF_lADODyLb1M4Br-e4zhqOrJ4
+paths:
+  specs: docs/specs/
+  specs_archive: docs/specs/archive/
+  tracking:
+    status: docs/STATUS.md
+agent:
+  language: es
+  conventions: AGENT.md
+mcp:
+  server: github
+sync:
+  archive_on_ship: false
+  default_since_days: 7
