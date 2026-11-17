@@ -18,7 +18,7 @@ ARG_RE = re.compile(r"[A-Za-z0-9@%+./_-]+")
 ABS_PATH_RE = re.compile(r"/[A-Za-z0-9._/-]+")
 UNIT_RE = re.compile(r"[A-Za-z0-9@._-]+")
 MODES = ("ro", "rw")
-RESOURCES = ("/usr/local/lib/rescue/resources.sh",)
+RESOURCES = ("/usr/lib/rescue/resources.sh",)
 
 
 class PresetError(ValueError):

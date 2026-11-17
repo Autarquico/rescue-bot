@@ -48,17 +48,22 @@ class AuditLog:
                 os.close(fd)
 
     def executed_epochs(self, app: str) -> list[float]:
-        """Instantes de las ejecuciones (con éxito o no) de `app`."""
+        """Instantes de las ejecuciones de `app`, con éxito o no, incluidas las que solo
+        dejaron `executing` (proceso muerto a medias). Se deduplica por propuesta."""
         try:
             lines = self._path.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
             return []
-        epochs = []
-        for raw in lines:
+        by_key: dict[object, float] = {}
+        for n, raw in enumerate(lines):
             try:
                 e = json.loads(raw)
             except ValueError:
                 continue
-            if isinstance(e, dict) and e.get("event") == "executed" and e.get("app") == app:
-                epochs.append(float(e["epoch"]))
-        return epochs
+            if not isinstance(e, dict) or e.get("app") != app:
+                continue
+            if e.get("event") not in ("executing", "executed"):
+                continue
+            key = e.get("proposal") or ("line", n)
+            by_key[key] = max(float(e["epoch"]), by_key.get(key, 0.0))
+        return list(by_key.values())

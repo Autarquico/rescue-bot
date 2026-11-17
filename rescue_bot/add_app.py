@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -18,10 +20,8 @@ from rescue_bot.config import App, ConfigError, known_hosts, load_app, load_sett
 from rescue_bot.enroll import NAME_RE, EnrollError, Runner, enroll
 
 HEALTHCHECKS_URL = "https://healthchecks.io/api/v3/checks/"
-RELOAD_CMD = (
-    "git -C /etc/rescue-bot/config pull --ff-only"
-    " && systemctl restart rescue-approver hermes-gateway"
-)
+RELOAD_SCRIPT = "/usr/local/sbin/rescue-reload"
+VERIFY_SCRIPT = "/usr/local/sbin/rescue-verify"
 TAG_COMMAND = "tailscale set --advertise-tags=tag:app"
 
 
@@ -54,13 +54,9 @@ def _checked(proc, what: str) -> str:
     return proc.stdout
 
 
-def write_ficha(config: Path, name: str, values: Mapping[str, str | None]) -> Path:
-    """(a) Escribe apps/<name>.yaml y lo valida con load_app; si no vale, lo borra."""
-    if not NAME_RE.fullmatch(name):
+def render_ficha(name: str, values: Mapping[str, str | None]) -> str:
+    if not NAME_RE.fullmatch(name) or name.startswith(("-", ".")):
         raise AddAppError(f"nombre de app inválido: {name!r}")
-    path = config / "apps" / f"{name}.yaml"
-    if path.exists():
-        raise AddAppError(f"{path} ya existe; bórralo si quieres rehacer el alta")
     preset = {"kind": values["preset"]}
     preset["unit" if values["preset"] == "systemd" else "dir"] = values["target"]
     ficha = {
@@ -72,25 +68,34 @@ def write_ficha(config: Path, name: str, values: Mapping[str, str | None]) -> Pa
     }
     if values.get("rollback_cmd"):
         ficha["rollback_cmd"] = values["rollback_cmd"]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(ficha, sort_keys=False), encoding="utf-8")
-    try:
-        load_app(path)
-    except ConfigError:
-        path.unlink()
-        raise
-    return path
+    return yaml.safe_dump(ficha, sort_keys=False)
 
 
-def record_host_key(config: Path, host: str, runner: Runner, console: Console) -> None:
-    """(b) ssh-keyscan → known_hosts, sin duplicar y sin aceptar una clave distinta."""
+def stage_config(config: Path, stage: Path, name: str, ficha: str) -> App:
+    """Copia mínima de la config en `stage` con la ficha candidata; valida con load_app.
+
+    Es lo que enroll ve: así ni la ficha ni known_hosts tocan la config real hasta que
+    el alta termina."""
+    (stage / "apps").mkdir()
+    path = stage / "apps" / f"{name}.yaml"
+    path.write_text(ficha, encoding="utf-8")
+    app = load_app(path)
+    shutil.copy(config / "settings.yaml", stage / "settings.yaml")
+    if (config / "keys").is_dir():
+        (stage / "keys").mkdir()
+        for pub in (config / "keys").glob("*.pub"):
+            shutil.copy(pub, stage / "keys" / pub.name)
+    return app
+
+
+def scan_host_key(config: Path, host: str, runner: Runner, console: Console) -> list[str]:
+    """(b) ssh-keyscan → imprime huellas y devuelve las líneas nuevas para known_hosts.
+    No escribe nada; rechaza una clave distinta de la ya conocida."""
     scan = _checked(runner.run(["ssh-keyscan", "-T", "5", host]), "ssh-keyscan")
     found = [line for line in scan.splitlines() if line and not line.startswith("#")]
     if not found:
         raise AddAppError(f"ssh-keyscan no devolvió claves de {host}")
     console.say(_checked(runner.run(["ssh-keygen", "-lf", "-"], input=scan), "ssh-keygen"))
-    if not console.confirm(f"¿Son las huellas de {host}?"):
-        raise AddAppError("host key rechazada")
     path = known_hosts(config)
     existing = path.read_text().splitlines() if path.exists() else []
     seen = {tuple(line.split()[:3]) for line in existing if line.strip()}
@@ -103,9 +108,13 @@ def record_host_key(config: Path, host: str, runner: Runner, console: Console) -
         if entry[:2] in slots:
             raise AddAppError(f"la host key de {host} ({entry[1]}) cambió; resuélvelo a mano")
         fresh.append(line)
-    if fresh:
+    return fresh
+
+
+def append_lines(path: Path, lines: Sequence[str]) -> None:
+    if lines:
         with path.open("a", encoding="utf-8") as f:
-            f.writelines(f"{line}\n" for line in fresh)
+            f.writelines(f"{line}\n" for line in lines)
 
 
 def check_tailscale_tag(host: str, runner: Runner) -> str:
@@ -142,11 +151,20 @@ def commit_config(config: Path, name: str, runner: Runner) -> bool:
     return True
 
 
-def reload_ct(rescue_ssh: str, runner: Runner) -> None:
-    """(g) El CT hace pull de la configuración y reinicia los servicios."""
+def _ssh_ct(rescue_ssh: str, command: str, what: str, runner: Runner) -> None:
     if rescue_ssh.startswith("-"):
         raise AddAppError("rescue_host.ssh inválido")
-    _checked(runner.run(["ssh", rescue_ssh, RELOAD_CMD]), "recarga del CT")
+    _checked(runner.run(["ssh", rescue_ssh, command]), what)
+
+
+def reload_ct(rescue_ssh: str, runner: Runner) -> None:
+    """(g) El CT hace pull con su deploy key y reinicia los servicios."""
+    _ssh_ct(rescue_ssh, RELOAD_SCRIPT, "recarga del CT", runner)
+
+
+def verify_in_ct(rescue_ssh: str, app: str, runner: Runner) -> None:
+    """(h) La verificación corre en el CT: es el único sitio con la clave ro del agente."""
+    _ssh_ct(rescue_ssh, f"{VERIFY_SCRIPT} {app}", "verificación en el CT", runner)
 
 
 def _collect(args: argparse.Namespace, console: Console) -> dict[str, str | None]:
@@ -188,16 +206,37 @@ def add_app(
     settings = load_settings(config)
 
     values = _collect(args, console)
-    ficha = write_ficha(config, args.app, values)
-    app = load_app(ficha)
-    console.say(f"ficha escrita: {ficha}")
+    ficha = render_ficha(args.app, values)
+    target = config / "apps" / f"{args.app}.yaml"
+    if target.exists() and not args.update:
+        raise AddAppError(f"{target} ya existe; usa --update para rehacer el alta")
 
-    record_host_key(config, app.host, runner, console)
+    with tempfile.TemporaryDirectory(prefix="add-app-") as tmp:
+        stage = Path(tmp)
+        app = stage_config(config, stage, args.app, ficha)
+        fresh = scan_host_key(config, app.host, runner, console)
+        hosts = known_hosts(config)
+        stage_hosts = known_hosts(stage)
+        stage_hosts.write_text(hosts.read_text() if hosts.exists() else "", encoding="utf-8")
+        append_lines(stage_hosts, fresh)
 
-    enroll_fn(app, config, dry_run=True, runner=runner, say=console.say)
-    if not console.confirm(f"¿Aplicar el alta en {app.host}?"):
-        raise AddAppError("cancelado")
-    enroll_fn(app, config, yes=True, runner=runner, say=console.say)
+        if args.dry_run:
+            console.say(f"--- {target} (no se escribe) ---\n{ficha}")
+            enroll_fn(app, stage, dry_run=True, runner=runner, say=console.say)
+            console.say("dry-run: nada escrito, aplicado ni subido")
+            return
+
+        if not console.confirm(f"¿Son las huellas de {app.host}?"):
+            raise AddAppError("host key rechazada")
+        enroll_fn(app, stage, dry_run=True, runner=runner, say=console.say)
+        if not console.confirm(f"¿Aplicar el alta en {app.host}?"):
+            raise AddAppError("cancelado")
+        enroll_fn(app, stage, yes=True, runner=runner, say=console.say)
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(ficha, encoding="utf-8")
+        append_lines(hosts, fresh)
+    console.say(f"ficha escrita: {target}")
 
     console.say(check_tailscale_tag(app.host, runner))
 
@@ -211,6 +250,8 @@ def add_app(
     if not args.no_reload:
         reload_ct(settings.rescue_ssh, runner)
         console.say("CT recargado")
+        verify_in_ct(settings.rescue_ssh, app.name, runner)
+        console.say("verificación en el CT: ok")
 
     result = check_health(app)
     console.say(f"smoke: {'ok' if result.ok else 'FALLA'} ({result.detail})")
@@ -230,6 +271,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--rollback-cmd")
     p.add_argument("--admin", default="root")
     p.add_argument("--yes", action="store_true")
+    p.add_argument("--dry-run", action="store_true", help="sin efectos: ficha, huellas y diff")
+    p.add_argument("--update", action="store_true", help="rehacer el alta de una app existente")
     p.add_argument("--no-reload", action="store_true")
     p.add_argument("--no-healthcheck", action="store_true")
     return p

@@ -1,7 +1,8 @@
 """Límite de acciones de escritura por app, calculado desde la auditoría.
 
 Una ejecución en curso se reserva en memoria: solo una a la vez por app. La
-reserva se libera después de escribir la entrada `executed`, que es la que cuenta.
+reserva se libera después de escribir `executed`; la entrada `executing`, escrita antes
+de actuar, ya cuenta para el límite aunque el proceso muera a mitad.
 """
 
 from __future__ import annotations

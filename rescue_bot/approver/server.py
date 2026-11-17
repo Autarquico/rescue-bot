@@ -95,6 +95,9 @@ class ProposalServer:
 
 def build_approver(slack, env: dict[str, str] | os._Environ) -> tuple[Approver, AuditLog]:
     config_dir = Path(env["RESCUE_CONFIG"])
+    # Huella primero y configuración después: si algo cambia entre ambas, la huella queda
+    # vieja y las aprobaciones se deniegan (falla hacia el lado seguro).
+    loaded_digest = config.config_digest(config_dir)
     settings = config.load_settings(config_dir)
     apps = config.load_apps(config_dir)
     audit = AuditLog(Path(env["RESCUE_AUDIT"]))
@@ -105,6 +108,7 @@ def build_approver(slack, env: dict[str, str] | os._Environ) -> tuple[Approver, 
         audit=audit,
         limiter=RateLimiter(audit, settings.limits),
         execute=Executor(Path(env["RESCUE_KEY_RW"]), config.known_hosts(config_dir)),
+        loaded_digest=loaded_digest,
         digest=lambda: config.config_digest(config_dir),
     )
     return approver, audit

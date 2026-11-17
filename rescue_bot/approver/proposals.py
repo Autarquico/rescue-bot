@@ -26,6 +26,10 @@ log = logging.getLogger(__name__)
 APPROVE_ID = "rescue_approve"
 REJECT_ID = "rescue_reject"
 MAX_OUTPUT = 3000
+MAX_REASON_SHOWN = 200
+MAX_PENDING_PER_APP = 2
+MAX_PENDING_TOTAL = 10
+TOO_MANY = "demasiadas propuestas pendientes"
 
 
 @dataclass(frozen=True)
@@ -44,8 +48,21 @@ def _esc(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _code_span(text: str, limit: int) -> str:
+    """Texto no fiable como `código` de una línea: Slack no enlaza ni formatea dentro."""
+    flat = " ".join(text.split())
+    if len(flat) > limit:
+        flat = flat[:limit] + "…"
+    return "`" + _esc(flat.replace("`", "'")) + "`"
+
+
+def _code_block(text: str) -> str:
+    return "```" + _esc(text.replace("`", "'")) + "```"
+
+
 def proposal_blocks(p: Proposal) -> list[dict]:
-    text = f"¿Ejecutar *{_esc(p.verb)}* en *{_esc(p.app)}*?\nMotivo (del agente): {_esc(p.reason)}"
+    reason = _code_span(p.reason, MAX_REASON_SHOWN)
+    text = f"¿Ejecutar *{_esc(p.verb)}* en *{_esc(p.app)}*?\nMotivo (del agente): {reason}"
     return [
         {"type": "section", "text": {"type": "mrkdwn", "text": text}},
         {
@@ -80,6 +97,7 @@ class Approver:
         audit: AuditLog,
         limiter: RateLimiter,
         execute: Callable[[App, str], Outcome],
+        loaded_digest: str,
         digest: Callable[[], str],
         clock: Callable[[], float] = time.time,
     ):
@@ -89,6 +107,11 @@ class Approver:
         self._audit = audit
         self._limiter = limiter
         self._execute = execute
+        # `loaded_digest` es la huella de la configuración con la que se cargaron `apps` y
+        # `settings` al arrancar; `digest()` es la huella actual. Toda propuesta se liga a la
+        # primera, así que cualquier cambio en disco invalida las aprobaciones pendientes hasta
+        # que rescue-reload reinicie el servicio (intencionado).
+        self._loaded_digest = loaded_digest
         self._digest = digest
         self._clock = clock
         self._lock = threading.Lock()
@@ -123,10 +146,18 @@ class Approver:
             channel=channel,
             created=now,
             expires=now + self._settings.limits.approval_ttl_s,
-            config_digest=self._digest(),
+            config_digest=self._loaded_digest,
         )
         with self._lock:
-            self._pending[p.id] = p
+            self._purge_expired()
+            if self._too_many(p.app):
+                full = True
+            else:
+                full = False
+                self._pending[p.id] = p
+        if full:
+            self._audit.write("rejected_proposal", app=p.app, verb=p.verb, detail=TOO_MANY)
+            return {"ok": False, "error": TOO_MANY}
         try:
             self._slack.chat_postMessage(
                 channel=channel,
@@ -143,6 +174,17 @@ class Approver:
         )
         return {"ok": True, "message": "propuesta publicada; requiere aprobación humana en Slack"}
 
+    def _purge_expired(self) -> None:
+        """Bajo el cerrojo."""
+        now = self._clock()
+        for pid in [k for k, v in self._pending.items() if now >= v.expires]:
+            del self._pending[pid]
+
+    def _too_many(self, app: str) -> bool:
+        """Bajo el cerrojo."""
+        same_app = sum(1 for v in self._pending.values() if v.app == app)
+        return same_app >= MAX_PENDING_PER_APP or len(self._pending) >= MAX_PENDING_TOTAL
+
     # --- clic humano -----------------------------------------------------------
 
     def decide(self, proposal_id: str, user: str, channel: str, ts: str, approve: bool) -> None:
@@ -158,6 +200,7 @@ class Approver:
 
     def _verdict(self, pid: str, user: str, channel: str, approve: bool):
         """Bajo el cerrojo. Devuelve (veredicto, propuesta, motivo de la denegación)."""
+        self._purge_expired()
         p = self._pending.get(pid)
         if p is None:
             return "deny", None, "propuesta desconocida, ya usada o caducada"
@@ -201,6 +244,12 @@ class Approver:
             channel, ts, f"Aprobada por <@{user}>: ejecutando {_esc(p.verb)} en {_esc(p.app)}…"
         )
         try:
+            # Antes de actuar: si el proceso muere a mitad, el límite ya cuenta esta ejecución.
+            self._audit.write("executing", app=p.app, verb=p.verb, proposal=p.id, user=user)
+        except Exception:
+            self._limiter.release(p.app)
+            raise
+        try:
             outcome = self._execute(self._apps[p.app], p.verb)
         except Exception as e:
             log.exception("fallo ejecutando")
@@ -225,11 +274,11 @@ class Approver:
         self._update(
             channel, ts, f"{_esc(p.verb)} en {_esc(p.app)} aprobada por <@{user}>: {verdict}."
         )
-        output = outcome.output[-MAX_OUTPUT:].replace("```", "'''")
         self._say(
             channel,
             f"Resultado de {_esc(p.verb)} en {_esc(p.app)}: {verdict}. "
-            f"Salud: {state} ({_esc(outcome.health_detail)}).\n```{output}```",
+            f"Salud: {state} ({_code_span(outcome.health_detail, MAX_REASON_SHOWN)}).\n"
+            + _code_block(outcome.output[-MAX_OUTPUT:]),
             thread_ts=ts,
         )
 

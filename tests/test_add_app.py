@@ -72,9 +72,11 @@ def test_happy_path(config):
     assert enrolled == [("web", True), ("web", False)]
     git = [c for c in runner.calls if c[0] == "git"]
     assert [c[3] for c in git] == ["add", "commit", "push"]
-    assert runner.calls[-1][0] == "ssh"
-    assert runner.calls[-1][1] == "root@rescue.example.ts.net"
-    assert "systemctl restart rescue-approver hermes-gateway" in runner.calls[-1][2]
+    ssh = [c for c in runner.calls if c[0] == "ssh"]
+    assert ssh == [
+        ["ssh", "root@rescue.example.ts.net", "/usr/local/sbin/rescue-reload"],
+        ["ssh", "root@rescue.example.ts.net", "/usr/local/sbin/rescue-verify web"],
+    ]
     url, headers, body = runner.posts[0]
     assert url == "https://healthchecks.io/api/v3/checks/"
     assert body == {"name": "web-up", "unique": ["name"], "channels": "*"}
@@ -90,11 +92,8 @@ def test_no_reload_and_no_healthcheck(config):
 
 def test_known_hosts_is_deduplicated_and_changed_key_refused(config):
     go(config)
-    (config / "apps" / "web.yaml").unlink()
-    go(config)
+    go(config, "--update")
     assert (config / "known_hosts").read_text() == SCAN
-
-    (config / "apps" / "web.yaml").unlink()
 
     class Changed(FakeRunner):
         def run(self, argv, **kw):
@@ -104,7 +103,56 @@ def test_known_hosts_is_deduplicated_and_changed_key_refused(config):
             return proc
 
     with pytest.raises(add_app.AddAppError):
-        go(config, runner=Changed())
+        go(config, "--update", runner=Changed())
+
+
+def snapshot(root):
+    return {p.relative_to(root): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_dry_run_has_no_side_effects(config):
+    before = snapshot(config)
+    runner, enrolled, said = go(config, "--dry-run", env={"HC_API_KEY": "k"})
+    assert snapshot(config) == before
+    assert not (config / "apps").exists() or not list((config / "apps").iterdir())
+    assert enrolled == [("web", True)]
+    assert {c[0] for c in runner.calls} <= {"ssh-keyscan", "ssh-keygen"}
+    assert not runner.posts
+    text = "\n".join(said)
+    assert "name: web" in text and "SHA256:abc" in text
+
+
+def test_failed_enroll_leaves_no_ficha_and_retry_works(config):
+    def boom(app, cfg, **kw):
+        if not kw.get("dry_run"):
+            raise enroll.EnrollError("falló")
+
+    console = add_app.Console(yes=True)
+    console.say = lambda _: None
+    with pytest.raises(enroll.EnrollError):
+        add_app.add_app(args(config), runner=FakeRunner(), console=console, env={}, enroll_fn=boom)
+    assert not (config / "apps" / "web.yaml").exists()
+    assert not (config / "known_hosts").exists()
+    go(config)
+    assert (config / "apps" / "web.yaml").exists()
+
+
+def test_existing_ficha_needs_update(config):
+    go(config)
+    with pytest.raises(add_app.AddAppError):
+        go(config)
+
+
+def test_verify_failure_in_ct_is_an_error(config):
+    class Failing(FakeRunner):
+        def run(self, argv, **kw):
+            proc = super().run(argv, **kw)
+            if argv[:2] == ["ssh", "root@rescue.example.ts.net"] and "verify" in argv[2]:
+                proc.returncode = 1
+            return proc
+
+    with pytest.raises(add_app.AddAppError):
+        go(config, runner=Failing())
 
 
 def test_invalid_preset_param_is_rejected_and_yaml_removed(config):

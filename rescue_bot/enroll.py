@@ -26,8 +26,8 @@ from rescue_bot.presets import Action
 from rescue_bot.ssh import Result, run_verb
 
 VM_DIR = Path(__file__).resolve().parent.parent / "vm"
-SHELL_PATH = "/usr/local/sbin/rescue-shell"
-RESOURCES_PATH = "/usr/local/lib/rescue/resources.sh"
+SHELL_PATH = "/usr/lib/rescue/rescue-shell"
+RESOURCES_PATH = "/usr/lib/rescue/resources.sh"
 ACTIONS_PATH = "/etc/rescue/actions.conf"
 SUDOERS_PATH = "/etc/sudoers.d/rescue"
 KEYS_PATH = "/home/rescue/.ssh/authorized_keys"
@@ -131,13 +131,39 @@ def desired_files(app: App, config: Path) -> dict[str, tuple[str, str]]:
     }
 
 
+ROOT_ONLY_FN = r"""
+root_only() {  # root_only <ruta>: la ruta y cada directorio hasta / son de root y sin g/o-w
+  local p=$1
+  [ -e "$p" ] || die "$p no existe"
+  while :; do
+    [ "$(stat -L -c %u "$p")" = 0 ] || die "$p no es de root"
+    [ $(( 8#$(stat -L -c %a "$p") & 8#022 )) = 0 ] || die "$p escribible por grupo u otros"
+    [ "$p" = / ] && break
+    p=$(dirname "$p")
+  done
+}
+root_only_real() {  # idem sobre la ruta original y sobre su destino si es un enlace
+  root_only "$1"
+  root_only "$(readlink -f "$1")"
+}
+"""
+
+
+def sudo_executables(actions: Sequence[Action]) -> list[str]:
+    return sorted({a.argv[0] for a in actions if a.sudo})
+
+
+def _sudo_guard(actions: Sequence[Action]) -> str:
+    return "".join(f"root_only_real {shlex.quote(exe)}\n" for exe in sudo_executables(actions))
+
+
 def _compose_guard(directory: str) -> str:
     files = " ".join(shlex.quote(f"{directory}/{name}") for name in COMPOSE_FILES)
     return f"""
-for p in {shlex.quote(directory)} {files}; do
+root_only_real {shlex.quote(directory)}
+for p in {files}; do
   [ -e "$p" ] || continue
-  [ "$(stat -c %u "$p")" = 0 ] || die "$p no es de root"
-  [ $(( 8#$(stat -c %a "$p") & 8#022 )) = 0 ] || die "$p escribible por grupo u otros"
+  root_only_real "$p"
 done
 """
 
@@ -156,16 +182,20 @@ def remote_script(app: App, files: dict[str, tuple[str, str]]) -> str:
     parts = [
         "set -euo pipefail\numask 022\n",
         'die() { echo "enroll: $*" >&2; exit 1; }\n',
+        ROOT_ONLY_FN,
         "tmp=$(mktemp); trap 'rm -f \"$tmp\"' EXIT\n",
+        _sudo_guard(app.actions),
         guard,
         "id rescue >/dev/null 2>&1 || useradd --system --home-dir /home/rescue "
         "--no-create-home --shell /bin/bash rescue\n",
         # `*` no es contraseña válida pero tampoco bloquea la cuenta (pubkey sigue funcionando).
         "usermod -p '*' rescue\n",
         "install -d -o root -g root -m 0755 /home/rescue /home/rescue/.ssh "
-        "/usr/local/sbin /usr/local/lib/rescue /etc/rescue\n",
+        "/usr/lib/rescue /etc/rescue\n",
         put(SHELL_PATH, *files[SHELL_PATH]),
         put(RESOURCES_PATH, *files[RESOURCES_PATH]),
+        f"root_only_real {SHELL_PATH}\nroot_only_real {RESOURCES_PATH}\n"
+        "root_only_real /usr/lib/rescue\n",
         put(ACTIONS_PATH, *files[ACTIONS_PATH]),
         put(KEYS_PATH, *files[KEYS_PATH]),
         f'printf %s {_b64(sudoers_content)} | base64 -d > "$tmp"\n',
@@ -218,14 +248,17 @@ def diff_remote(app: App, config: Path, files: dict[str, tuple[str, str]], runne
 
 
 def verify(app: App, config: Path, key_ro: Path, run: Callable[..., Result] = run_verb) -> None:
+    """Sin cambios remotos: un verbo ro debe funcionar y todo verbo rw ser rechazado (64)."""
     hosts = known_hosts(config)
-    if not run(app, "status", key_ro, hosts).ok:
-        raise EnrollError("verificación: `status` con la clave ro falló")
-    rw_verbs = app.verbs("rw")
-    if rw_verbs:
-        attempt = run(app, rw_verbs[0], key_ro, hosts)
+    ro_verbs = app.verbs("ro")
+    if not ro_verbs:
+        raise EnrollError("verificación: la app no tiene verbos ro")
+    if not run(app, ro_verbs[0], key_ro, hosts).ok:
+        raise EnrollError(f"verificación: `{ro_verbs[0]}` con la clave ro falló")
+    for verb in app.verbs("rw"):
+        attempt = run(app, verb, key_ro, hosts)
         if attempt.ok or attempt.code != 64:
-            raise EnrollError(f"verificación: `{rw_verbs[0]}` con la clave ro NO fue rechazado")
+            raise EnrollError(f"verificación: `{verb}` con la clave ro NO fue rechazado")
 
 
 def enroll(
@@ -234,11 +267,9 @@ def enroll(
     *,
     dry_run: bool = False,
     yes: bool = False,
-    verify_key_ro: Path | None = None,
     runner: Runner | None = None,
     confirm: Callable[[str], bool] = lambda q: input(f"{q} [s/N] ").strip().lower() in ("s", "y"),
     say: Callable[[str], None] = print,
-    run: Callable[..., Result] = run_verb,
 ) -> None:
     runner = runner or Runner()
     files = desired_files(app, config)
@@ -255,9 +286,6 @@ def enroll(
     say(proc.stdout.strip())
     if proc.returncode != 0:
         raise EnrollError(f"el script remoto falló: {proc.stderr.strip()}")
-    if verify_key_ro:
-        verify(app, config, verify_key_ro, run)
-        say("verificación: ok")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -266,17 +294,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--config", required=True, type=Path)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--yes", action="store_true")
+    p.add_argument("--verify-only", action="store_true", help="solo verifica; sin cambios remotos")
     p.add_argument("--verify-key-ro", type=Path)
     args = p.parse_args(argv)
     try:
         app = load_app(args.config / "apps" / f"{args.app}.yaml")
-        enroll(
-            app,
-            args.config,
-            dry_run=args.dry_run,
-            yes=args.yes,
-            verify_key_ro=args.verify_key_ro,
-        )
+        if args.verify_only:
+            if not args.verify_key_ro:
+                raise EnrollError("--verify-only exige --verify-key-ro")
+            verify(app, args.config, args.verify_key_ro)
+            print("verificación: ok")
+        else:
+            enroll(app, args.config, dry_run=args.dry_run, yes=args.yes)
     except (EnrollError, ConfigError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

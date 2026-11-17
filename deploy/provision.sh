@@ -6,7 +6,7 @@
 #   - /root/.ssh/config_deploy_key: deploy key de SOLO LECTURA del repo privado de
 #     configuración (si el repo se sirve por SSH). Se usa únicamente aquí, como root.
 #   - Variable opcional HERMES_SPEC: paquete de Hermes para `uv tool install`
-#     (por defecto "hermes-agent"). Ver README: la forma de instalación no está verificada.
+#     (por defecto fijado a la etiqueta v2026.6.5 en git). Ver README: el empaquetado no está verificado.
 set -euo pipefail
 
 REPO="" CONFIG_REPO="" REF="main"
@@ -24,7 +24,7 @@ done
 CODE=/opt/rescue-bot
 CONFIG=/etc/rescue-bot/config
 AGENT_HOME=/var/lib/rescue-agent
-HERMES_SPEC="${HERMES_SPEC:-hermes-agent}"
+HERMES_SPEC="${HERMES_SPEC:-hermes-agent @ git+https://github.com/NousResearch/hermes-agent@v2026.6.5}"
 DEPLOY_KEY=/root/.ssh/config_deploy_key
 
 echo "== paquetes"
@@ -118,6 +118,10 @@ install -m 0644 -o root -g root "$CODE/engines/hermes/SOUL.md" "$AGENT_HOME/.her
 # config.yaml.tmpl: se renderiza con envsubst-like simple sobre ${VAR}; sin plantillas, copia literal
 sed -e "s|\${RESCUE_CONFIG}|$CONFIG|g" "$CODE/engines/hermes/config.yaml.tmpl" \
   | install -m 0644 -o root -g root /dev/stdin "$AGENT_HOME/.hermes/config.yaml"
+
+echo "== scripts de administración"
+install -m 0755 -o root -g root "$CODE/deploy/rescue-reload" /usr/local/sbin/rescue-reload
+install -m 0755 -o root -g root "$CODE/deploy/rescue-verify" /usr/local/sbin/rescue-verify
 
 echo "== unidades systemd"
 install -m 0644 "$CODE/deploy/rescue-approver.service" /etc/systemd/system/

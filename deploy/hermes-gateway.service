@@ -7,7 +7,6 @@ Wants=network-online.target
 User=agent
 Group=agent
 SupplementaryGroups=rescue-ipc
-StateDirectory=rescue-agent
 Environment=HOME=/var/lib/rescue-agent
 Environment=HERMES_HOME=/var/lib/rescue-agent/.hermes
 Environment=RESCUE_CONFIG=/etc/rescue-bot/config
@@ -21,7 +20,8 @@ RestartSec=5
 
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/rescue-agent
+# Solo los subdirectorios de estado (propiedad de agent, creados por provision.sh); el resto es de root.
+ReadWritePaths=/var/lib/rescue-agent/.hermes/sessions /var/lib/rescue-agent/.hermes/logs /var/lib/rescue-agent/.hermes/memories /var/lib/rescue-agent/.hermes/cache /var/lib/rescue-agent/.hermes/workspace
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

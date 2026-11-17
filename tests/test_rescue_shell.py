@@ -13,6 +13,7 @@ CATALOGUE = """\
 status ro /bin/echo running
 big ro /usr/bin/head -c 200000 /dev/zero
 restart rw /usr/bin/touch {marker}
+env ro /usr/bin/env
 """
 
 
@@ -26,7 +27,7 @@ def env(tmp_path):
     bin_dir.mkdir()
     if not shutil.which("timeout"):  # macOS: shim solo de tests
         shim = bin_dir / "timeout"
-        shim.write_text('#!/bin/sh\nshift\nexec "$@"\n')
+        shim.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')
         shim.chmod(0o755)
     base = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -109,3 +110,20 @@ def test_catalogue_not_owned_by_root_is_refused_without_testing_env(env):
         pytest.skip("el propietario es root")
     r = run(env, "ro", "status", testing=False)
     assert r.returncode != 0 and r.stdout == ""
+
+
+def test_client_environment_does_not_reach_the_command(env):
+    environ = {**env[0], "SSH_ORIGINAL_COMMAND": "env", "SECRET_CLIENT": "x", "LD_PRELOAD": "/x"}
+    r = subprocess.run([str(SHELL), "ro", str(env[1])], env=environ, capture_output=True,
+                       text=True, timeout=30, check=False)  # fmt: skip
+    assert r.returncode == 0
+    names = {line.split("=")[0] for line in r.stdout.splitlines()}
+    assert {"PATH", "LANG"} <= names
+    assert names <= {"PATH", "LANG", "PWD", "SHLVL", "_"}  # PWD/SHLVL los añade el shim de macOS
+    assert "LANG=C.UTF-8" in r.stdout
+
+
+def test_script_pins_timeout_kill_and_scrubs_env():
+    text = SHELL.read_text()
+    assert "unset BASH_ENV ENV" in text
+    assert "-k 5" in text and "env -i" in text

@@ -156,6 +156,17 @@ def test_request_action_without_socket_returns_error(tools, monkeypatch, tmp_pat
         "secret: s3cr3t",
         "Authorization: Bearer abcdef0123456789",
         "Bearer abcdef0123456789",
+        '{"user": "bob", "password": "hunter2"}',
+        '{"PASSWORD": "hunter2"}',
+        "SECRET_KEY=hunter2",
+        "client_secret=hunter2",
+        "APP_SECRET_VALUE=hunter2",
+        "access_token=hunter2",
+        "api_key=hunter2",
+        "API-KEY: hunter2",
+        "apikey=hunter2",
+        "DATABASE_URL=postgres://app:hunter2@db:5432/app",
+        "https://user:hunter2@example.com/x",
     ],
 )
 def test_redact_masks(plugin, secret):
@@ -164,6 +175,12 @@ def test_redact_masks(plugin, secret):
     assert "[REDACTED]" in out and "antes" in out and "después" in out
     for fragment in ("hunter2", "s3cr3t", "abcdef0123456789", "IOSFODNN7", "abc\ndef"):
         assert fragment not in out
+
+
+def test_redact_keeps_url_host_and_user(plugin):
+    redact = sys.modules["rescue_plugin.redact"].redact
+    out = redact("postgres://app:hunter2@db:5432/app")
+    assert out == "postgres://app:[REDACTED]@db:5432/app"
 
 
 def test_redact_keeps_plain_text(plugin):

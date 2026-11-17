@@ -12,7 +12,11 @@ _PATTERNS = [
     ),
     re.compile(r"(?i)\b(authorization\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?[^\s\"']+"),
     re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}"),
-    re.compile(r"(?i)\b((?:password|passwd|secret|token)\s*[=:]\s*)(?:\"[^\"]*\"|'[^']*'|\S+)"),
+    re.compile(
+        r"(?i)([\w.-]*(?:password|passwd|secret|token|api[_-]?key)[\w.-]*[\"']?\s*[=:]\s*)"
+        r"(?:\"[^\"]*\"|'[^']*'|\S+)"
+    ),
+    re.compile(r"(\b[A-Za-z][\w+.-]*://[^:/\s@]+:)[^@\s/]+(@)"),
     re.compile(r"\bxox[abpr]-[A-Za-z0-9-]{8,}"),
     re.compile(r"\bxapp-[A-Za-z0-9-]{8,}"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),
@@ -23,10 +27,13 @@ _PATTERNS = [
 ]
 
 
+def _mask(m: re.Match) -> str:
+    """Conserva el prefijo (grupo 1) y, si existe, el sufijo (grupo 2)."""
+    suffix = m.group(2) if m.re.groups > 1 else ""
+    return m.group(1) + MASK + suffix
+
+
 def redact(text: str) -> str:
     for pattern in _PATTERNS:
-        if pattern.groups:
-            text = pattern.sub(lambda m: m.group(1) + MASK, text)
-        else:
-            text = pattern.sub(MASK, text)
+        text = pattern.sub(_mask if pattern.groups else MASK, text)
     return text

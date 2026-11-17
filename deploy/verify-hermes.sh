@@ -24,13 +24,17 @@ else
 fi
 
 # 2. plugin y config: root y no escribibles por agent
-for p in "$AGENT_HOME/.hermes" "$AGENT_HOME/.hermes/config.yaml" "$AGENT_HOME/.hermes/SOUL.md" "$AGENT_HOME/.hermes/plugins"; do
+for p in "$AGENT_HOME" "$AGENT_HOME/.hermes" "$AGENT_HOME/.hermes/config.yaml" "$AGENT_HOME/.hermes/SOUL.md" "$AGENT_HOME/.hermes/plugins"; do
   [[ "$(stat -c %U "$p")" == root ]] || bad "$p no es de root"
 done
 while IFS= read -r -d '' f; do
   [[ "$(stat -c %U "$f")" == root ]] || bad "$f no es de root"
   runuser -u agent -- test -w "$f" && bad "agent puede escribir en $f"
 done < <(find "$AGENT_HOME/.hermes/plugins" "$AGENT_HOME/.hermes/config.yaml" "$AGENT_HOME/.hermes/SOUL.md" -print0)
+runuser -u agent -- test -w "$AGENT_HOME" && bad "agent puede escribir en $AGENT_HOME"
+for d in sessions logs memories cache workspace; do
+  [[ "$(stat -c %U "$AGENT_HOME/.hermes/$d")" == agent ]] || bad "$AGENT_HOME/.hermes/$d no es de agent (estado)"
+done
 runuser -u agent -- test -w "$AGENT_HOME/.hermes" && bad "agent puede escribir en .hermes (podría sustituir plugin/config)"
 runuser -u agent -- test -w /etc/rescue-bot/config && bad "agent puede escribir en la configuración"
 [[ $fail -eq 0 ]] && ok "plugin y config de root, no escribibles por agent"

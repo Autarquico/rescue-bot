@@ -8,6 +8,7 @@ host keys verificadas contra el known_hosts de la configuración privada.
 
 from __future__ import annotations
 
+import re
 import signal
 import subprocess
 import threading
@@ -19,6 +20,8 @@ from rescue_bot.presets import is_verb
 
 TIMEOUT_S = 150
 MAX_OUTPUT = 64 * 1024
+USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+HOST_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,8 @@ def ssh_argv(app: App, verb: str, key: Path, known_hosts: Path) -> list[str]:
 def run_verb(app: App, verb: str, key: Path, known_hosts: Path, timeout: int = TIMEOUT_S) -> Result:
     if not is_verb(verb):
         return Result(False, 2, f"verbo inválido: {verb!r}")
+    if not (USER_RE.fullmatch(app.user) and HOST_RE.fullmatch(app.host)):
+        return Result(False, 2, f"destino inválido: {app.user}@{app.host}")
     proc = subprocess.Popen(
         ssh_argv(app, verb, key, known_hosts),
         stdin=subprocess.DEVNULL,
@@ -78,13 +83,13 @@ def run_verb(app: App, verb: str, key: Path, known_hosts: Path, timeout: int = T
         while chunk := stdout.read1(8192):
             chunks.append(chunk)
             size += len(chunk)
-            if size >= MAX_OUTPUT:
+            if size > MAX_OUTPUT:
                 proc.kill()
                 break
         code = proc.wait()
     finally:
         watchdog.cancel()
-    truncated = size >= MAX_OUTPUT or code == -signal.SIGKILL
+    truncated = size > MAX_OUTPUT or code == -signal.SIGKILL
     out = b"".join(chunks)[:MAX_OUTPUT].decode("utf-8", errors="replace")
     if truncated:
         out += "\n[salida truncada o tiempo agotado]"

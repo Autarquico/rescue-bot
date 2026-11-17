@@ -62,7 +62,7 @@ def vm(tmp_path, example_app) -> Vm:
     logger.chmod(0o755)
     if not shutil.which("timeout"):  # macOS: shim solo de tests
         shim = bin_dir / "timeout"
-        shim.write_text('#!/bin/sh\nshift\nexec "$@"\n')
+        shim.write_text('#!/bin/sh\n[ "$1" = -k ] && shift 2\nshift\nexec "$@"\n')
         shim.chmod(0o755)
     env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "RESCUE_SHELL_TESTING": "1"}
     return Vm(env, conf, markers, syslog)

@@ -137,7 +137,7 @@ def test_valid_approval_runs_with_rw_key_then_checks_health_and_reports(tmp_path
     assert steps == [("ssh", "example", "restart", "key_rw"), ("health", "example")]
     report = env.slack.posted[-1]["text"]
     assert "reiniciado" in report and "HTTP 200" in report
-    assert env.events() == ["proposed", "executed"]
+    assert env.events() == ["proposed", "executing", "executed"]
 
 
 # --- escenario 8 (cadena: tres ejecuciones reales vía clic → la cuarta se bloquea) ----

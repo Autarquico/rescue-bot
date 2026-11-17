@@ -39,14 +39,15 @@ approver (CT rescue, usuario `approver`; otra app de Slack)
 | Socket Unix con `{app, verb, motivo}` y validación en `approver` | El agente solo puede *proponer* verbos `rw` existentes. | — |
 | Aprobación humana: solo IDs de `approvers`, un solo uso, caduca a 10 min, límites 1/5 min y 3/h | Prompt injection no basta para ejecutar nada; no hay bucles de reinicios. | Un aprobador que pulse sin leer. |
 | Plugin y config de Hermes de root y de solo lectura para `agent` | El agente no puede reescribir sus propias herramientas. | — |
-| Tailnet: `tag:rescue → tag:app:22` únicamente | Sin acceso a Proxmox ni al resto de la LAN. | — |
+| Tailnet: `tag:rescue → tag:app:22` únicamente | Sin acceso a Proxmox ni al resto de la LAN por Tailscale. | — |
+| Firewall de Proxmox en el CT (`deploy/create-ct.sh`): entrada DROP, salida DROP a RFC1918 salvo DNS al gateway | El CT no alcanza la LAN ni Proxmox; Tailscale (encapsulado por Internet) sigue funcionando. | Solo se aplica con el firewall del datacenter activado (ver abajo). |
 | `gitleaks` en CI | El repo público no filtra IPs reales, hostnames `*.ts.net`, ni secretos. | Secretos ya en el historial de otro repo. |
 
 Datos hacia el modelo: los logs de diagnóstico van al proveedor del modelo con redacción básica (tokens, claves privadas, `password=`); es incompleta por diseño. Todo lo que devuelve una VM es dato no fiable; la garantía real son las capas anteriores, no el prompt.
 
 ## Quickstart de despliegue
 
-1. **Crear el CT** (en devsrv02, como root): `deploy/create-ct.sh [CTID]` (por defecto 120).
+1. **Crear el CT** (en devsrv02, como root): `deploy/create-ct.sh [CTID]` (por defecto 120) `[LAN_GATEWAY]` (por defecto 192.168.0.1). Activa el firewall de Proxmox en el CT (`/etc/pve/firewall/<CTID>.fw`); para que se aplique, el firewall del datacenter debe estar activado (`pve-firewall` en marcha y `enable: 1` en `/etc/pve/firewall/cluster.fw`). El script no lo activa ni cambia la política del datacenter (`policy_in` sigue ACCEPT salvo que ya la hayas cambiado), para no afectar a otros invitados. Sin SSH entrante salvo `MGMT_CIDR=<cidr>`; se entra por Tailscale o `pct exec`.
 2. **Provisionar** (dentro del CT, como root):
    ```
    /root/.ssh/config_deploy_key   # deploy key de SOLO LECTURA del repo privado de configuración (0600)
@@ -62,11 +63,15 @@ Datos hacia el modelo: los logs de diagnóstico van al proveedor del modelo con 
 
 ### Instalación de Hermes (no verificada)
 
-`provision.sh` instala Hermes con `uv tool install ${HERMES_SPEC:-hermes-agent}` como root en `/opt/hermes` con el binario en `/usr/local/bin/hermes`, de modo que el agente no pueda modificar su propio ejecutable. Si el paquete o el instalador oficial difieren, exporta `HERMES_SPEC` o adapta esa sección. Igualmente, `verify-hermes.sh` asume `hermes tools list --platform slack` (configurable con `HERMES_TOOLS_CMD`).
+`provision.sh` instala Hermes con `uv tool install "$HERMES_SPEC"` como root en `/opt/hermes` con el binario en `/usr/local/bin/hermes`, de modo que el agente no pueda modificar su propio ejecutable. `HERMES_SPEC` está fijado por defecto a `hermes-agent @ git+https://github.com/NousResearch/hermes-agent@v2026.6.5` (etiqueta citada en la documentación upstream; que el repo se instale así con `uv` no está verificado). Si el paquete o el instalador oficial difieren, exporta `HERMES_SPEC` o adapta esa sección. `/var/lib/rescue-agent` y `.hermes` son de root; solo `sessions`, `logs`, `memories`, `cache` y `workspace` son de `agent` y son lo único escribible en la unidad (`ReadWritePaths=`, sin `StateDirectory=`). Igualmente, `verify-hermes.sh` asume `hermes tools list --platform slack` (configurable con `HERMES_TOOLS_CMD`).
 
 ## Añadir una app
 
-Con Claude Code: `/add-to-sre` (skill en `skills/add-to-sre/`), que inspecciona la VM en modo lectura, propone el preset y ejecuta `bin/add-app` con dry-run y confirmación. Sin Claude: `bin/add-app <app> --config <dir-config> ...`. Escribe `apps/<app>.yaml`, da de alta la VM (`bin/enroll`), sube la config y recarga el CT.
+Con Claude Code: `/add-to-sre` (skill en `skills/add-to-sre/`), que inspecciona la VM en modo lectura, propone el preset y sigue este flujo: `bin/add-app <app> --config <dir-config> ... --dry-run` (sin efectos: imprime la ficha YAML, las huellas de las host keys y el diff de enroll) → se muestra → confirmación del usuario → la misma orden sin `--dry-run`, que da de alta la VM, sube la config, recarga el CT con `/usr/local/sbin/rescue-reload` y verifica con `/usr/local/sbin/rescue-verify <app>`.
+
+Ambos scripts se instalan en el CT (root, 0755) desde `deploy/rescue-reload` y `deploy/rescue-verify`. `rescue-reload` hace `git pull --ff-only` de la config con la deploy key, reaplica propietario/modos y reinicia `rescue-approver` y `hermes-gateway`. `rescue-verify` valida el nombre de la app y ejecuta `rescue-enroll --verify-only` como `agent` con la clave `ro`.
+
+En las VMs, el usuario `rescue` tiene shell `/bin/bash`: el `command=` forzado la necesita real; `restrict` + `command=` en `authorized_keys` lo confinan. En la ficha de la app, `vm_actions` son listas argv; `actions:` se deriva, no se declara.
 
 ## Contrato de rollback
 

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Recarga la configuración privada en el CT y reinicia los servicios. Instalado por provision.sh
+# en /usr/local/sbin/rescue-reload (root, 0755). Sin argumentos.
+set -euo pipefail
+
+CONFIG=/etc/rescue-bot/config
+DEPLOY_KEY=/root/.ssh/config_deploy_key
+
+[[ $EUID -eq 0 ]] || { echo "ejecuta como root" >&2; exit 1; }
+[[ $# -eq 0 ]] || { echo "uso: rescue-reload" >&2; exit 2; }
+
+GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes" git -C "$CONFIG" pull --ff-only
+chown -R root:root "$CONFIG"
+chmod -R u=rwX,go=rX "$CONFIG"
+systemctl restart rescue-approver hermes-gateway

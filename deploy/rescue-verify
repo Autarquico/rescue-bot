@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Verifica el enroll de una app con las claves del CT. Instalado por provision.sh en
+# /usr/local/sbin/rescue-verify (root, 0755). Uso: rescue-verify <app>
+set -euo pipefail
+
+[[ $EUID -eq 0 ]] || { echo "ejecuta como root" >&2; exit 1; }
+[[ $# -eq 1 ]] || { echo "uso: rescue-verify <app>" >&2; exit 2; }
+app="$1"
+[[ "$app" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { echo "nombre de app inválido: $app" >&2; exit 2; }
+
+exec runuser -u agent -- /opt/rescue-bot/.venv/bin/rescue-enroll "$app" \
+  --config /etc/rescue-bot/config --verify-only --verify-key-ro /etc/rescue-bot/agent/key_ro

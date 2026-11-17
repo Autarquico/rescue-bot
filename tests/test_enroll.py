@@ -33,8 +33,8 @@ def test_sudoers_exact_lines_only():
 
 def test_authorized_keys_exact_lines():
     assert enroll.render_authorized_keys("100.64.0.10", RO, RW).splitlines() == [
-        f'restrict,from="100.64.0.10",command="/usr/local/sbin/rescue-shell ro" {RO}',
-        f'restrict,from="100.64.0.10",command="/usr/local/sbin/rescue-shell rw" {RW}',
+        f'restrict,from="100.64.0.10",command="/usr/lib/rescue/rescue-shell ro" {RO}',
+        f'restrict,from="100.64.0.10",command="/usr/lib/rescue/rescue-shell rw" {RW}',
     ]
 
 
@@ -92,12 +92,46 @@ def test_apply_sends_idempotent_script_over_stdin(config):
         assert needle in script
 
 
+def test_remote_script_checks_ownership_of_every_sudo_executable(config):
+    app = load_app(config / "apps" / "example.yaml")
+    script = enroll.remote_script(app, enroll.desired_files(app, config))
+    assert "stat -L -c %u" in script and "8#022" in script and '[ "$p" = / ] && break' in script
+    sudo_exes = {a.argv[0] for a in app.actions if a.sudo}
+    assert sudo_exes
+    for exe in sudo_exes:
+        assert f"root_only_real {exe}\n" in script
+    # los guards van antes de cualquier cambio en la VM
+    assert script.index(f"root_only_real {sorted(sudo_exes)[0]}") < script.index("useradd")
+    # y tras instalar rescue-shell se comprueba ella y su directorio
+    tail = script[script.index(f"install -o root -g root -m 0755 \"$tmp\" {enroll.SHELL_PATH}") :]
+    assert f"root_only_real {enroll.SHELL_PATH}" in tail
+    assert "root_only_real /usr/lib/rescue" in tail
+    assert tail.index("root_only_real /usr/lib/rescue") < tail.index(enroll.KEYS_PATH)
+
+
 def test_apply_declined_changes_nothing(config):
     runner = FakeRunner()
     with pytest.raises(enroll.EnrollError):
         enroll.enroll(load_app(config / "apps" / "example.yaml"), config, runner=runner,
                       confirm=lambda _: False, say=lambda _: None)  # fmt: skip
     assert all(call[1] is None for call in runner.calls)
+
+
+def test_verify_only_makes_no_remote_changes(config, capsys):
+    key = config / "keys" / "key_ro"
+    calls = []
+
+    def fake(_app, verb, _key, _hosts):
+        calls.append(verb)
+        return Result(True, 0, "") if verb == "status" else Result(False, 64, "")
+
+    app = load_app(config / "apps" / "example.yaml")
+    enroll.verify(app, config, key, fake)
+    assert calls == [*app.verbs("ro")[:1], *app.verbs("rw")]
+
+
+def test_verify_only_flag_requires_key(config):
+    assert enroll.main(["example", "--config", str(config), "--verify-only"]) == 1
 
 
 def test_verify_requires_ro_ok_and_rw_rejected(config):

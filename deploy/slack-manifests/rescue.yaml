@@ -13,14 +13,12 @@ oauth_config:
       - chat:write
       - channels:history
       - groups:history
-      - im:history
       - users:read
 settings:
   event_subscriptions:
     bot_events:
       - app_mention
       - message.groups
-      - message.im
   interactivity:
     is_enabled: false
   org_deploy_enabled: false

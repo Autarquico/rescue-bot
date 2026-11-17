@@ -24,7 +24,7 @@ def test_valid_approval_executes_once_and_posts_result(env):
     assert env.slack.updated[-1]["blocks"] == []
     result = env.slack.posted[-1]
     assert result["thread_ts"] == "111.222" and "salida" in result["text"]
-    assert env.events() == ["proposed", "executed"]
+    assert env.events() == ["proposed", "executing", "executed"]
 
 
 def test_reject_by_approver_consumes(env):
@@ -66,7 +66,7 @@ def test_double_click(env):
     click(env, pid)
     click(env, pid)
     assert env.executor.calls == [("example", "restart")]
-    assert env.events() == ["proposed", "executed", "denied_approval"]
+    assert env.events() == ["proposed", "executing", "executed", "denied_approval"]
 
 
 def test_concurrent_double_click(tmp_path):
@@ -153,3 +153,129 @@ def test_rate_limit_rechecked_at_click_time(env):
     _executed(env, 10)
     click(env, pid)
     assert env.executor.calls == [] and env.events()[-1] == "denied_approval"
+
+
+# SEC-6: tope de propuestas pendientes
+def _submit(env, app="example", verb="restart"):
+    line = json.dumps({"app": app, "verb": verb, "reason": "x"}).encode()
+    return env.approver.submit(line)
+
+
+def test_pending_cap_per_app_rejects_without_posting(env):
+    assert _submit(env)["ok"] and _submit(env)["ok"]
+    posted = len(env.slack.posted)
+    reply = _submit(env)
+    assert reply["ok"] is False and "demasiadas" in reply["error"]
+    assert len(env.slack.posted) == posted
+    assert env.events()[-1] == "rejected_proposal"
+    assert "demasiadas propuestas pendientes" in env.audit._path.read_text().splitlines()[-1]
+
+
+def test_pending_cap_total(env):
+    env.approver._pending.update({f"p{i}": _fake_pending(env, f"app{i}") for i in range(10)})
+    reply = _submit(env)
+    assert reply["ok"] is False and env.slack.posted == []
+
+
+def _fake_pending(env, app):
+    from rescue_bot.approver.proposals import Proposal
+
+    now = env.clock.now
+    return Proposal("x", app, "restart", "r", CHANNEL, now, now + 600, "d")
+
+
+def test_expired_proposals_are_purged_on_propose(env):
+    _submit(env)
+    _submit(env)
+    env.clock.now += 10_000
+    assert _submit(env)["ok"] is True
+    assert len(env.approver._pending) == 1
+
+
+def test_expired_proposals_are_purged_on_click(env):
+    pid = env.propose()
+    env.clock.now += 10_000
+    click(env, "otra")
+    assert env.approver._pending == {}
+    click(env, pid)
+    assert env.executor.calls == []
+
+
+# SEC-8: "executing" cuenta aunque no llegue "executed"
+def test_executing_entry_written_before_action_and_counts(env):
+    seen = []
+    env.executor.gate = None
+    real = env.executor.__call__
+
+    class Spy:
+        def __call__(self, app, verb):
+            seen.append(env.events())
+            return real(app, verb)
+
+    env.approver._execute = Spy()
+    pid = env.propose()
+    click(env, pid)
+    assert seen == [["proposed", "executing"]]
+    assert env.events() == ["proposed", "executing", "executed"]
+    assert len(env.audit.executed_epochs("example")) == 1  # deduplicado por propuesta
+
+
+def test_crash_mid_execution_still_counts_after_restart(tmp_path):
+    env = Env(tmp_path)
+
+    class Boom(BaseException):
+        pass
+
+    def die(app, verb):
+        raise Boom
+
+    env.approver._execute = die
+    pid = env.propose()
+    with pytest.raises(Boom):
+        click(env, pid)
+    assert env.events() == ["proposed", "executing"]
+    from rescue_bot.approver.ratelimit import RateLimiter
+
+    fresh = RateLimiter(env.audit, env.approver._settings.limits, env.clock)
+    assert fresh.check("example") is not None
+
+
+# Slack: escapado
+def test_reason_is_escaped_and_not_linkable(env):
+    reason = "<!channel> <http://evil|ok> & `x` ```boom``` https://evil.example"
+    env.approver.submit(
+        json.dumps({"app": "example", "verb": "restart", "reason": reason}).encode()
+    )
+    text = env.slack.posted[-1]["blocks"][0]["text"]["text"]
+    shown = text.split("Motivo (del agente): ", 1)[1]
+    assert shown.startswith("`") and shown.endswith("`")
+    assert "<" not in shown and ">" not in shown and "`" not in shown[1:-1]
+    assert "&lt;!channel&gt;" in shown and "&amp;" in shown
+
+
+def test_reason_display_is_capped(env):
+    env.approver.submit(
+        json.dumps({"app": "example", "verb": "restart", "reason": "a" * 500}).encode()
+    )
+    shown = env.slack.posted[-1]["blocks"][0]["text"]["text"]
+    assert "a" * 201 not in shown and "a" * 200 in shown
+
+
+def test_output_is_escaped_in_result(tmp_path):
+    from rescue_bot.approver.executor import Outcome
+
+    env = Env(tmp_path)
+    env.approver._execute = lambda app, verb: Outcome(
+        0, "<!here> a & b ``` <@U1>", True, "HTTP 200"
+    )
+    click(env, env.propose())
+    text = env.slack.posted[-1]["text"]
+    body = text.split("```", 1)[1].rsplit("```", 1)[0]
+    assert "<" not in body and ">" not in body and "`" not in body
+    assert "&lt;!here&gt; a &amp; b" in body
+
+
+# Config: la huella es la de la carga
+def test_proposals_bind_to_loaded_digest(env):
+    pid = env.propose()
+    assert env.approver._pending[pid].config_digest == env.approver._loaded_digest

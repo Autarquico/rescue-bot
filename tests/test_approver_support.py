@@ -65,6 +65,7 @@ class Env:
         self.slack = FakeSlack()
         self.executor = executor or FakeExecutor()
         self.audit = AuditLog(tmp_path / "audit.jsonl", self.clock)
+        loaded_digest = config.config_digest(self.config_dir)
         settings = config.load_settings(self.config_dir)
         self.approver = Approver(
             apps=config.load_apps(self.config_dir),
@@ -73,6 +74,7 @@ class Env:
             audit=self.audit,
             limiter=RateLimiter(self.audit, settings.limits, self.clock),
             execute=self.executor,
+            loaded_digest=loaded_digest,
             digest=lambda: config.config_digest(self.config_dir),
             clock=self.clock,
         )
