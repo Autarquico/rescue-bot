@@ -40,7 +40,8 @@ cat >/etc/sysctl.d/90-rescue.conf <<'SYSCTL'
 net.ipv6.conf.all.disable_ipv6=1
 net.ipv6.conf.default.disable_ipv6=1
 SYSCTL
-sysctl --system >/dev/null
+sysctl -p /etc/sysctl.d/90-rescue.conf >/dev/null
+[[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" == 1 ]] || { echo "ERROR: no se pudo desactivar IPv6" >&2; exit 1; }
 
 echo "== tailscale"
 if ! command -v tailscale >/dev/null; then
