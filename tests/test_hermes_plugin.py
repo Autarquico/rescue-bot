@@ -63,6 +63,7 @@ def test_register_exposes_rescue_toolset(plugin):
 def test_template_enables_only_rescue_on_slack():
     cfg = yaml.safe_load((HERMES / "config.yaml.tmpl").read_text())
     assert cfg["platform_toolsets"] == {"slack": ["rescue"]}
+    assert cfg["plugins"]["enabled"] == ["rescue"]
     disabled = set(cfg["agent"]["disabled_toolsets"])
     assert {"terminal", "file", "code_execution", "web", "browser"} <= disabled
     assert "rescue" not in disabled

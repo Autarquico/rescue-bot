@@ -4,6 +4,9 @@ model:
   provider: anthropic
   default: claude-sonnet-5-5
 
+plugins:
+  enabled: [rescue]   # los plugins de Hermes son opt-in
+
 platform_toolsets:
   slack: [rescue]
 
