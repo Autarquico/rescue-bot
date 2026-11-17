@@ -55,7 +55,7 @@ def _checked(proc, what: str) -> str:
 
 
 def render_ficha(name: str, values: Mapping[str, str | None]) -> str:
-    if not NAME_RE.fullmatch(name) or name.startswith(("-", ".")):
+    if not NAME_RE.fullmatch(name):
         raise AddAppError(f"nombre de app inválido: {name!r}")
     preset = {"kind": values["preset"]}
     preset["unit" if values["preset"] == "systemd" else "dir"] = values["target"]
@@ -146,7 +146,9 @@ def commit_config(config: Path, name: str, runner: Runner) -> bool:
         return False
     git = ["git", "-C", str(config)]
     _checked(runner.run([*git, "add", f"apps/{name}.yaml", "known_hosts"]), "git add")
-    _checked(runner.run([*git, "commit", "-m", f"add app {name}"]), "git commit")
+    staged = runner.run([*git, "diff", "--cached", "--quiet"])
+    if staged.returncode != 0:
+        _checked(runner.run([*git, "commit", "-m", f"add app {name}"]), "git commit")
     _checked(runner.run([*git, "push"]), "git push")
     return True
 

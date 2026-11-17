@@ -32,7 +32,7 @@ ACTIONS_PATH = "/etc/rescue/actions.conf"
 SUDOERS_PATH = "/etc/sudoers.d/rescue"
 KEYS_PATH = "/home/rescue/.ssh/authorized_keys"
 
-NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 HOST_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 USER_RE = re.compile(r"[a-z_][a-z0-9_-]*")
 PUBKEY_RE = re.compile(

@@ -12,8 +12,9 @@ SCAN = "web.example.ts.net ssh-ed25519 AAAAhostkey\n"
 
 
 class FakeRunner:
-    def __init__(self, tailscale=None):
+    def __init__(self, tailscale=None, staged=True):
         self.calls = []
+        self.staged = staged
         self.posts = []
         self.tailscale = tailscale
 
@@ -22,7 +23,8 @@ class FakeRunner:
         out = SCAN if argv[0] == "ssh-keyscan" else "256 SHA256:abc web (ED25519)\n"
         if argv[:2] == ["tailscale", "status"]:
             out = json.dumps(self.tailscale)
-        return subprocess.CompletedProcess(argv, 0, out, "")
+        code = int(self.staged) if argv[3:5] == ["diff", "--cached"] else 0
+        return subprocess.CompletedProcess(argv, code, out, "")
 
     def which(self, name):
         return "/usr/bin/tailscale" if self.tailscale is not None else None
@@ -71,7 +73,7 @@ def test_happy_path(config):
     assert (config / "known_hosts").read_text() == SCAN
     assert enrolled == [("web", True), ("web", False)]
     git = [c for c in runner.calls if c[0] == "git"]
-    assert [c[3] for c in git] == ["add", "commit", "push"]
+    assert [c[3] for c in git] == ["add", "diff", "commit", "push"]
     ssh = [c for c in runner.calls if c[0] == "ssh"]
     assert ssh == [
         ["ssh", "root@rescue.example.ts.net", "/usr/local/sbin/rescue-reload"],
@@ -193,3 +195,22 @@ def test_tailscale_missing_warns_with_command():
 
 def test_enroll_runner_is_shared():
     assert add_app.Runner is enroll.Runner
+
+
+def test_unchanged_config_skips_commit_but_still_pushes(config):
+    from rescue_bot.add_app import commit_config
+
+    (config / ".git").mkdir(exist_ok=True)
+    runner = FakeRunner(staged=False)
+    assert commit_config(config, "web", runner)
+    assert [c[3] for c in runner.calls] == ["add", "diff", "push"]
+
+
+def test_app_names_match_the_ct_verify_pattern():
+    import pytest as _pytest
+
+    from rescue_bot.add_app import AddAppError, render_ficha
+
+    for bad in ["My.App", "-x", "a" * 33, "1app"]:
+        with _pytest.raises(AddAppError):
+            render_ficha(bad, {"preset": "systemd", "target": "web.service"})

@@ -115,9 +115,7 @@ cp -r "$CODE/engines/hermes/plugin/rescue" "$AGENT_HOME/.hermes/plugins/rescue"
 chown -R root:root "$AGENT_HOME/.hermes/plugins"
 chmod -R u=rwX,go=rX "$AGENT_HOME/.hermes/plugins"
 install -m 0644 -o root -g root "$CODE/engines/hermes/SOUL.md" "$AGENT_HOME/.hermes/SOUL.md"
-# config.yaml.tmpl: se renderiza con envsubst-like simple sobre ${VAR}; sin plantillas, copia literal
-sed -e "s|\${RESCUE_CONFIG}|$CONFIG|g" "$CODE/engines/hermes/config.yaml.tmpl" \
-  | install -m 0644 -o root -g root /dev/stdin "$AGENT_HOME/.hermes/config.yaml"
+install -m 0644 -o root -g root "$CODE/engines/hermes/config.yaml.tmpl" "$AGENT_HOME/.hermes/config.yaml"
 
 echo "== scripts de administración"
 install -m 0755 -o root -g root "$CODE/deploy/rescue-reload" /usr/local/sbin/rescue-reload
@@ -147,6 +145,6 @@ $(cat /etc/rescue-bot/agent/key_ro.pub)
 -- keys/key_rw.pub
 $(cat /etc/rescue-bot/approver/key_rw.pub)
 
-Luego: commit + push en el repo de configuración y, en el CT, git -C $CONFIG pull.
+Luego: commit + push en el repo de configuración y, en el CT, /usr/local/sbin/rescue-reload.
 Las VMs se dan de alta con bin/enroll / bin/add-app, que leen esas claves.
 MSG
