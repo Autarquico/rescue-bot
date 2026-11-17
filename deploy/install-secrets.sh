@@ -16,7 +16,7 @@ ask() { # <variable> <etiqueta> [visible]
     echo >&2
   fi
   [[ -n "$v" ]] || { echo "valor vacío para $1" >&2; exit 1; }
-  [[ "$v" != *$'\n'* && "$v" != *\'* ]] || { echo "valor no válido para $1" >&2; exit 1; }
+  [[ "$v" != *[[:space:]\'\"]* ]] || { echo "valor no válido para $1 (contiene espacios o comillas)" >&2; exit 1; }
   printf -v "$1" '%s' "$v"
 }
 
