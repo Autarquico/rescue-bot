@@ -35,7 +35,8 @@ runuser -u agent -- test -w "$AGENT_HOME" && bad "agent puede escribir en $AGENT
 for d in sessions logs memories cache workspace; do
   [[ "$(stat -c %U "$AGENT_HOME/.hermes/$d")" == agent ]] || bad "$AGENT_HOME/.hermes/$d no es de agent (estado)"
 done
-runuser -u agent -- test -w "$AGENT_HOME/.hermes" && bad "agent puede escribir en .hermes (podría sustituir plugin/config)"
+# .hermes es escribible por agent (estado de Hermes) pero con bit sticky: no puede borrar ni renombrar lo de root.
+[[ "$(stat -c %a "$AGENT_HOME/.hermes")" == 1775 ]] || bad ".hermes no tiene modo 1775 (sticky): agent podría sustituir plugin/config"
 runuser -u agent -- test -w /etc/rescue-bot/config && bad "agent puede escribir en la configuración"
 [[ $fail -eq 0 ]] && ok "plugin y config de root, no escribibles por agent"
 
