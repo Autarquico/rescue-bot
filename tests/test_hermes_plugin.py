@@ -204,3 +204,13 @@ def test_redact_does_not_touch_bypass_or_compass(plugin):
 def test_redact_keeps_plain_text(plugin):
     redact = sys.modules["rescue_plugin.redact"].redact
     assert redact("nginx.service active (running)") == "nginx.service active (running)"
+
+
+@pytest.mark.parametrize("line", ["password" * 8000, "a" * 65536 + "=", "pass " * 13000])
+def test_redact_is_linear_on_hostile_lines(plugin, line):
+    import time
+
+    redact = sys.modules["rescue_plugin.redact"].redact
+    start = time.monotonic()
+    redact(line)
+    assert time.monotonic() - start < 1

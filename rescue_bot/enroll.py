@@ -150,7 +150,7 @@ root_only_real() {  # idem sobre la ruta original y sobre su destino si es un en
 }
 root_only_path() {  # ruta que puede no existir aún: su primer ancestro existente debe ser de root
   p="$1"
-  while [ ! -e "$p" ]; do p=$(dirname "$p"); done
+  while [ ! -e "$p" ] && [ ! -L "$p" ]; do p=$(dirname "$p"); done
   root_only_real "$p"
 }
 """

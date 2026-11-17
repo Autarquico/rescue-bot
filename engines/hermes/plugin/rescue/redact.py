@@ -14,8 +14,8 @@ _PATTERNS = [
     re.compile(r"(?i)\b((?:set-)?cookie\s*:\s*)[^\r\n]+"),
     re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(
-        r"(?i)([\w.-]*(?:passw(?:or)?d|(?<![a-z])pass|pwd|credential|private[_-]?key|secret|token|api[_-]?key)"
-        r"[\w.-]*[\"']?\s*[=:]\s*)"
+        r"(?i)([\w.-]{0,64}(?:passw(?:or)?d|(?<![a-z])pass|pwd|credential|private[_-]?key|secret|token|api[_-]?key)"
+        r"[\w.-]{0,64}[\"']?\s{0,8}[=:]\s{0,8})"
         r"(?:\"[^\"]*\"|'[^']*'|\S+)"
     ),
     re.compile(r"(\b[A-Za-z][\w+.-]*://[^:/\s@]*:)[^@\s/]+(@)"),
