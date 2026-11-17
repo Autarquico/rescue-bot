@@ -148,6 +148,11 @@ root_only_real() {  # idem sobre la ruta original y sobre su destino si es un en
   root_only "$1"
   root_only "$(readlink -f "$1")"
 }
+root_only_path() {  # ruta que puede no existir aún: su primer ancestro existente debe ser de root
+  p="$1"
+  while [ ! -e "$p" ]; do p=$(dirname "$p"); done
+  root_only_real "$p"
+}
 """
 
 
@@ -156,7 +161,17 @@ def sudo_executables(actions: Sequence[Action]) -> list[str]:
 
 
 def sudo_paths(actions: Sequence[Action]) -> list[str]:
-    """argv[0] y todo argumento absoluto de las acciones sudo: root los ejecuta o los lee."""
+    """argv[0] y todo argumento absoluto de las acciones sudo: root los ejecuta o los lee.
+
+    Una ruta que no se pueda comprobar (relativa, embebida en una opción, con `.` o `..`)
+    se rechaza: con sudo, toda ruta ha de ser absoluta y canónica.
+    """
+    for act in actions:
+        if not act.sudo:
+            continue
+        for arg in act.argv:
+            if "/" in arg and not arg.startswith("/") or {".", ".."} & set(arg.split("/")):
+                raise EnrollError(f"{act.verb}: ruta no comprobable en acción sudo: {arg!r}")
     return sorted(
         {
             arg
@@ -173,10 +188,8 @@ def _sudo_guard(actions: Sequence[Action]) -> str:
     lines = []
     for path in sudo_paths(actions):
         q = shlex.quote(path)
-        # argv[0] debe existir (aborta si no); un argumento absoluto solo se exige si existe.
-        lines.append(
-            f"root_only_real {q}\n" if path in exes else f"[ ! -e {q} ] || root_only_real {q}\n"
-        )
+        # argv[0] debe existir; un argumento absoluto que aún no existe no puede crearlo la app.
+        lines.append(f"root_only_real {q}\n" if path in exes else f"root_only_path {q}\n")
     return "".join(lines)
 
 

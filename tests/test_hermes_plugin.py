@@ -169,6 +169,8 @@ def test_request_action_without_socket_returns_error(tools, monkeypatch, tmp_pat
         "https://user:hunter2@example.com/x",
         "redis://:hunter2@cache:6379/0",
         "DB_PASS=hunter2",
+        "PGPASSWORD=hunter2",
+        "MYSQL_PASSWD=hunter2",
         "pwd=hunter2",
         "Cookie: session=hunter2",
         "Set-Cookie: sid=hunter2; HttpOnly",

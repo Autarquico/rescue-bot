@@ -118,7 +118,7 @@ def test_sudo_guard_covers_absolute_path_arguments():
     ]
     guard = enroll._sudo_guard(acts)
     assert "root_only_real /bin/bash\n" in guard
-    assert "[ ! -e /srv/x/fix.sh ] || root_only_real /srv/x/fix.sh\n" in guard
+    assert "root_only_path /srv/x/fix.sh\n" in guard
     assert "--flag" not in guard and "rel" not in guard and "/srv/y" not in guard
 
 
@@ -170,3 +170,16 @@ def test_verify_requires_ro_ok_and_rw_rejected(config):
         enroll.verify(app, config, key, fake(False, 64))
     with pytest.raises(enroll.EnrollError):
         enroll.verify(app, config, key, fake(True, 0))
+
+
+def test_sudo_argument_that_does_not_exist_yet_is_checked_through_its_ancestor():
+    acts = [Action("fix", "rw", ("/bin/bash", "/srv/app/fix.sh"), True)]
+    assert "root_only_path /srv/app/fix.sh\n" in enroll._sudo_guard(acts)
+
+
+@pytest.mark.parametrize(
+    "arg", ["-f/srv/app/fix.sh", "../srv/app/fix.sh", "/srv/app/../x", "/srv/./x"]
+)
+def test_sudo_rejects_paths_it_cannot_check(arg):
+    with pytest.raises(enroll.EnrollError):
+        enroll.sudo_paths([Action("fix", "rw", ("/bin/bash", arg), True)])
