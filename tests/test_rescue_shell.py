@@ -119,7 +119,8 @@ def test_catalogue_not_owned_by_root_is_refused_without_testing_env(env):
 
 
 def test_client_environment_does_not_reach_the_command(env):
-    environ = {**env[0], "SSH_ORIGINAL_COMMAND": "env", "SECRET_CLIENT": "x", "LD_PRELOAD": "/x"}
+    hostile = {"SECRET_CLIENT": "x", "LD_LIBRARY_PATH": "/x"}
+    environ = {**env[0], "SSH_ORIGINAL_COMMAND": "env", **hostile}
     r = subprocess.run([str(SHELL), "ro", str(env[1])], env=environ, capture_output=True,
                        text=True, timeout=30, check=False)  # fmt: skip
     assert r.returncode == 0

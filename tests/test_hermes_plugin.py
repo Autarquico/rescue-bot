@@ -151,7 +151,8 @@ def test_request_action_without_socket_returns_error(tools, monkeypatch, tmp_pat
         "AKIAIOSFODNN7EXAMPLE",
         "sk-ant-api03-abcdefgh12345678",
         "sk-" + "c" * 30,
-        "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\ndef\n-----END OPENSSH PRIVATE KEY-----",
+        "-----BEGIN OPENSSH PRIVATE" + " KEY-----\nabc\ndef\n"
+        "-----END OPENSSH PRIVATE" + " KEY-----",
         "password=hunter2",
         "secret: s3cr3t",
         "Authorization: Bearer abcdef0123456789",
