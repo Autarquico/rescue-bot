@@ -106,16 +106,18 @@ if pct status "$CTID" >/dev/null 2>&1; then
   exit 0
 fi
 
-template="$(pveam list "$TEMPLATE_STORAGE" | awk '/debian-13-standard/ {print $1}' | sort | tail -n1)"
+arch="$(dpkg --print-architecture)"
+pattern="debian-13-standard_.*_${arch}\\.tar"
+template="$(pveam list "$TEMPLATE_STORAGE" | awk -v p="$pattern" '$1 ~ p {print $1}' | sort -V | tail -n1)"
 if [[ -z "$template" ]]; then
   pveam update
-  name="$(pveam available --section system | awk '/debian-13-standard/ {print $2}' | sort | tail -n1)"
-  [[ -n "$name" ]] || die "no hay plantilla debian-13-standard disponible"
+  name="$(pveam available --section system | awk -v p="$pattern" '$2 ~ p {print $2}' | sort -V | tail -n1)"
+  [[ -n "$name" ]] || die "no hay plantilla debian-13-standard para $arch"
   pveam download "$TEMPLATE_STORAGE" "$name"
   template="${TEMPLATE_STORAGE}:vztmpl/${name}"
 fi
 
-pct create "$CTID" "$template" \
+pct create "$CTID" "$template" --arch "$arch" \
   --hostname "$HOSTNAME_CT" \
   --unprivileged 1 \
   --cores 1 \
