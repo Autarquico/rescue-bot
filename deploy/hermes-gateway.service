@@ -1,0 +1,35 @@
+[Unit]
+Description=Hermes Agent gateway (conversación en Slack, solo lectura)
+After=network-online.target tailscaled.service rescue-approver.service
+Wants=network-online.target
+
+[Service]
+User=agent
+Group=agent
+SupplementaryGroups=rescue-ipc
+StateDirectory=rescue-agent
+Environment=HOME=/var/lib/rescue-agent
+Environment=HERMES_HOME=/var/lib/rescue-agent/.hermes
+Environment=RESCUE_CONFIG=/etc/rescue-bot/config
+Environment=RESCUE_SOCKET=/run/rescue/approver.sock
+Environment=RESCUE_KEY_RO=/etc/rescue-bot/agent/key_ro
+EnvironmentFile=/etc/rescue-bot/agent/hermes.env
+WorkingDirectory=/var/lib/rescue-agent/.hermes/workspace
+ExecStart=/usr/local/bin/hermes gateway
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/rescue-agent
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

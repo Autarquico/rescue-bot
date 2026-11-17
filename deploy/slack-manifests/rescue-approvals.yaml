@@ -1,0 +1,18 @@
+# App de Slack «rescue-approvals»: botones Aprobar/Rechazar. Socket Mode, sin eventos.
+display_information:
+  name: rescue-approvals
+  description: Aprobación humana de acciones de rescate
+features:
+  bot_user:
+    display_name: rescue-approvals
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+settings:
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

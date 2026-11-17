@@ -1,0 +1,29 @@
+// Fragmento de política del tailnet para rescue-bot. NO es la política completa.
+// Cómo fusionarlo: en https://login.tailscale.com/admin/acls/file copia las claves
+// de "tagOwners" y las entradas de "grants" dentro de las secciones existentes
+// de tu política (no pegues este fichero entero encima). Si usas "acls" clásico
+// en vez de "grants", la regla equivalente está comentada abajo.
+// Etiqueta cada VM dada de alta con `tailscale up --advertise-tags=tag:app`.
+// Nada más sale de tag:rescue: ni Proxmox (8006/8007) ni la LAN.
+{
+	"tagOwners": {
+		"tag:rescue": ["autogroup:admin"],
+		"tag:app":    ["autogroup:admin"],
+	},
+
+	"grants": [
+		{
+			"src": ["tag:rescue"],
+			"dst": ["tag:app"],
+			"ip":  ["tcp:22"],
+		},
+	],
+
+	// Equivalente con "acls":
+	// "acls": [
+	//   {"action": "accept", "src": ["tag:rescue"], "dst": ["tag:app:22"]},
+	// ],
+	// Acceso del administrador al CT (ssh -t root@<ct>): añade a tu regla de admin
+	// {"src": ["autogroup:admin"], "dst": ["tag:rescue"], "ip": ["tcp:22"]}
+	// El CT no acepta conexiones entrantes de nadie más.
+}

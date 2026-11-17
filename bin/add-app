@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Alta completa de una app: bin/add-app <app> --config <dir> [opciones]
+set -euo pipefail
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+exec uv run --project "$repo" python -m rescue_bot.add_app "$@"

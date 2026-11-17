@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Alta de una VM: bin/enroll <app> --config <dir> [--dry-run] [--yes]
+set -euo pipefail
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+exec uv run --project "$repo" python -m rescue_bot.enroll "$@"
