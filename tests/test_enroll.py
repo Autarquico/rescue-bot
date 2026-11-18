@@ -316,3 +316,11 @@ def test_bash_guard_still_checks_other_sudo_paths_inside_a_trusted_project(tmp_p
     owners = {str(project): (RUNNER_UID, 755), fix: ("1000", 666)}
     r = run_guard(tmp_path, app_at(project, trusted_owner="runner", vm_actions=vm), owners)
     assert r.returncode != 0 and fix in r.stderr
+
+
+def test_bash_guard_rejects_a_dangling_compose_symlink_in_a_trusted_project(tmp_path, project):
+    Path(compose_file(project)).unlink()
+    Path(compose_file(project)).symlink_to(tmp_path / "missing.yml")
+    owners = {str(project): (RUNNER_UID, 755)}
+    r = run_guard(tmp_path, app_at(project, trusted_owner="runner"), owners)
+    assert r.returncode != 0 and "no existe" in r.stderr

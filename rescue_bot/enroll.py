@@ -240,7 +240,7 @@ def _compose_guard(preset: dict) -> str:
         prologue = f'trusted_uid=$(id -u {owner}) || die "trusted_owner {owner} no existe"\n'
     return f"""{prologue}
 for p in {paths}; do
-  [ -e "$p" ] || [ "$p" = {directory} ] || continue
+  [ -e "$p" ] || [ -L "$p" ] || [ "$p" = {directory} ] || continue  # un enlace colgante aborta
   {check}
 done
 """
