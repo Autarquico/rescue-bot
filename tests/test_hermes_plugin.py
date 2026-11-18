@@ -67,7 +67,7 @@ def test_template_enables_only_rescue_on_slack():
     disabled = set(cfg["agent"]["disabled_toolsets"])
     assert {"terminal", "file", "code_execution", "web", "browser"} <= disabled
     assert "rescue" not in disabled
-    assert cfg["model"]["provider"] == "anthropic"
+    assert cfg["model"]["provider"] == "deepseek"
     assert cfg["slack"]["require_mention"] is True
 
 

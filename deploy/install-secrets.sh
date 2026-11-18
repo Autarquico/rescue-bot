@@ -23,7 +23,7 @@ ask() { # <variable> <etiqueta> [visible]
 ask AGENT_BOT "Slack (app rescue) Bot token xoxb-"
 ask AGENT_APP "Slack (app rescue) App-level token xapp-"
 ask ALLOWED "Slack user IDs permitidos para hablar con el agente (coma-separados)" visible
-ask ANTHROPIC "ANTHROPIC_API_KEY"
+ask DEEPSEEK "DEEPSEEK_API_KEY"
 ask APPR_BOT "Slack (app rescue-approvals) Bot token xoxb-"
 ask APPR_APP "Slack (app rescue-approvals) App-level token xapp-"
 
@@ -40,7 +40,7 @@ write_env() { # <fichero> <dueño> <líneas...>
 
 write_env /etc/rescue-bot/agent/hermes.env agent \
   "SLACK_BOT_TOKEN=$AGENT_BOT" "SLACK_APP_TOKEN=$AGENT_APP" \
-  "SLACK_ALLOWED_USERS=$ALLOWED" "ANTHROPIC_API_KEY=$ANTHROPIC"
+  "SLACK_ALLOWED_USERS=$ALLOWED" "DEEPSEEK_API_KEY=$DEEPSEEK"
 write_env /etc/rescue-bot/approver/slack.env approver \
   "SLACK_BOT_TOKEN=$APPR_BOT" "SLACK_APP_TOKEN=$APPR_APP"
 
