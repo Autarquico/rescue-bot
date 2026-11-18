@@ -231,3 +231,18 @@ def test_ficha_carries_compose_file_and_trusted_owner():
         "kind": "docker-compose", "dir": "/opt/app",
         "file": "docker-compose.prod.yml", "trusted_owner": "runner",
     }  # fmt: skip
+
+
+def test_ficha_splits_several_trusted_owners_and_keeps_the_group():
+    import yaml
+
+    from rescue_bot.add_app import render_ficha
+
+    values = {
+        "preset": "docker-compose", "target": "/opt/app", "trusted_owner": "deploy,runner",
+        "trusted_group": "team", "url": "https://app.example",
+        "health_url": "https://app.example/health", "expect": "200",
+        "host": "app.example.ts.net", "admin": "root",
+    }  # fmt: skip
+    preset = yaml.safe_load(render_ficha("app", values))["preset"]
+    assert preset["trusted_owner"] == ["deploy", "runner"] and preset["trusted_group"] == "team"

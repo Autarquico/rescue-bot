@@ -148,14 +148,21 @@ root_only_real() {  # idem sobre la ruta original y sobre su destino si es un en
   root_only "$1"
   root_only "$(readlink -f "$1")"
 }
-owner_only() {  # <ruta> <uid> <dir>: dentro de <dir>, de root o <uid> sin g/o-w; fuera, root_only
-  local p u
+# owner_only <ruta> <dir>: dentro de <dir>, de root o de $trusted_uids, sin o-w y sin g-w salvo
+# grupo $trusted_gid; el primer ancestro fuera de <dir>, root_only.
+owner_only() {
+  local p u m
   for p in "$1" "$(readlink -f "$1")"; do
     [ -e "$p" ] || die "$p no existe"
-    while [ "$p" = "$3" ] || [ "${p#"$3"/}" != "$p" ]; do
+    while [ "$p" = "$2" ] || [ "${p#"$2"/}" != "$p" ]; do
       u=$(stat -L -c %u "$p")
-      [ "$u" = 0 ] || [ "$u" = "$2" ] || die "$p no es de root ni del dueño de confianza"
-      [ $(( 8#$(stat -L -c %a "$p") & 8#022 )) = 0 ] || die "$p escribible por grupo u otros"
+      case " 0 $trusted_uids " in
+        *" $u "*) ;;
+        *) die "$p no es de root ni de un dueño de confianza" ;;
+      esac
+      m=022
+      [ -n "$trusted_gid" ] && [ "$(stat -L -c %g "$p")" = "$trusted_gid" ] && m=002
+      [ $(( 8#$(stat -L -c %a "$p") & 8#$m )) = 0 ] || die "$p escribible por grupo u otros"
       p=$(dirname "$p")
     done
     root_only "$p"
@@ -209,13 +216,23 @@ def _sudo_guard(actions: Sequence[Action], skip: frozenset[str] = frozenset()) -
     return "".join(lines)
 
 
-def _trusted_owner(preset: dict) -> str | None:
-    owner = preset.get("trusted_owner")
+def _valid_name(value: object) -> bool:
+    return isinstance(value, str) and bool(USER_RE.fullmatch(value)) and value != "rescue"
+
+
+def _trusted(preset: dict) -> tuple[tuple[str, ...], str | None]:
+    """Dueños (`trusted_owner`: usuario o lista) y grupo (`trusted_group`) de confianza."""
+    owner, group = preset.get("trusted_owner"), preset.get("trusted_group")
     if owner is None:
-        return None
-    if not isinstance(owner, str) or not USER_RE.fullmatch(owner) or owner == "rescue":
+        if group is not None:
+            raise EnrollError("`trusted_group` exige `trusted_owner`")
+        return (), None
+    owners = (owner,) if isinstance(owner, str) else owner
+    if not isinstance(owners, (list, tuple)) or not owners or not all(map(_valid_name, owners)):
         raise EnrollError("`trusted_owner` no válido (nunca `rescue`)")
-    return owner
+    if group is not None and not _valid_name(group):
+        raise EnrollError("`trusted_group` no válido (nunca `rescue`)")
+    return tuple(owners), group
 
 
 def _compose_paths(preset: dict) -> list[str]:
@@ -224,20 +241,41 @@ def _compose_paths(preset: dict) -> list[str]:
     return [directory, *(f"{directory}/{name}" for name in names)]
 
 
+def _trusted_prologue(owners: tuple[str, ...], group: str | None) -> str:
+    lines = ['trusted_uids=""', 'trusted_gid=""']
+    for o in owners:
+        lines.append(f'uid=$(id -u {o}) || die "trusted_owner {o} no existe"')
+        lines.append('trusted_uids="$trusted_uids $uid"')
+    if group:
+        names = " ".join(owners)
+        lines += [
+            f'trusted_gid=$(getent group {group} | cut -d: -f3)',
+            f'[ -n "$trusted_gid" ] || die "trusted_group {group} no existe"',
+            f'for m in $(getent group {group} | cut -d: -f4 | tr , " ") '
+            f"$(getent passwd | awk -F: -v g=\"$trusted_gid\" '$4 == g {{print $1}}'); do",
+            f'  case " {names} " in *" $m "*) ;; '
+            f'*) die "$m está en trusted_group {group} y no es trusted_owner" ;; esac',
+            "done",
+        ]
+    return "\n".join(lines) + "\n"
+
+
 def _compose_guard(preset: dict) -> str:
     """El proyecto compose lo lee root vía sudo: sus ficheros no pueden ser de cualquiera.
 
-    `trusted_owner` (opcional en la ficha) admite además a ese usuario como dueño del
-    directorio y sus ficheros: solo tiene sentido si ya equivale a root (p. ej. sudo ALL).
+    `trusted_owner` (opcional en la ficha) admite además a esos usuarios como dueños del
+    directorio y sus ficheros: solo tiene sentido si ya equivalen a root (sudo ALL, grupo
+    docker). `trusted_group` admite escritura de ese grupo si todos sus miembros son dueños
+    de confianza; la VM lo comprueba al enrolar.
     """
     directory = shlex.quote(preset["dir"])
     paths = " ".join(shlex.quote(p) for p in _compose_paths(preset))
-    owner = _trusted_owner(preset)
-    if owner is None:
+    owners, group = _trusted(preset)
+    if not owners:
         check, prologue = 'root_only_real "$p"', ""
     else:
-        check = f'owner_only "$p" "$trusted_uid" {directory}'
-        prologue = f'trusted_uid=$(id -u {owner}) || die "trusted_owner {owner} no existe"\n'
+        check = f'owner_only "$p" {directory}'
+        prologue = _trusted_prologue(owners, group)
     return f"""{prologue}
 for p in {paths}; do
   [ -e "$p" ] || [ -L "$p" ] || [ "$p" = {directory} ] || continue  # un enlace colgante aborta
@@ -250,7 +288,7 @@ def remote_script(app: App, files: dict[str, tuple[str, str]]) -> str:
     preset = app.raw.get("preset") or {}
     compose = preset.get("kind") == "docker-compose"
     guard = _compose_guard(preset) if compose else ""
-    trusted = compose and _trusted_owner(preset) is not None
+    trusted = compose and bool(_trusted(preset)[0])
     skip = frozenset(_compose_paths(preset)) if trusted else frozenset()
 
     def put(path: str, content: str, mode: str) -> str:

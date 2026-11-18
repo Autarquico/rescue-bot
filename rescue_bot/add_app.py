@@ -59,9 +59,12 @@ def render_ficha(name: str, values: Mapping[str, str | None]) -> str:
         raise AddAppError(f"nombre de app inválido: {name!r}")
     preset = {"kind": values["preset"]}
     preset["unit" if values["preset"] == "systemd" else "dir"] = values["target"]
-    for key in ("file", "trusted_owner"):
+    for key in ("file", "trusted_owner", "trusted_group"):
         if values.get(key):
             preset[key] = values[key]
+    owners = preset.get("trusted_owner", "").split(",")
+    if len(owners) > 1:
+        preset["trusted_owner"] = owners
     ficha = {
         "name": name,
         "url": values["url"],
@@ -194,6 +197,7 @@ def _collect(args: argparse.Namespace, console: Console) -> dict[str, str | None
         "rollback_cmd": args.rollback_cmd,
         "file": args.file,
         "trusted_owner": args.trusted_owner,
+        "trusted_group": args.trusted_group,
     }
 
 
@@ -275,7 +279,13 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--file", help="docker-compose: fichero compose no estándar dentro de --dir")
     p.add_argument(
         "--trusted-owner",
-        help="docker-compose: usuario (ya equivalente a root) admitido como dueño del proyecto",
+        help="docker-compose: usuarios (ya equivalentes a root), separados por comas, "
+        "admitidos como dueños del proyecto",
+    )
+    p.add_argument(
+        "--trusted-group",
+        help="docker-compose: grupo con escritura admitida; "
+        "todos sus miembros deben ser dueños de confianza",
     )
     p.add_argument("--health-url")
     p.add_argument("--expect", type=int, default=200)

@@ -234,34 +234,52 @@ def test_remote_script_skips_sudo_checks_only_for_a_trusted_project():
 def test_trusted_owner_relaxes_only_the_compose_project():
     app = compose_app(trusted_owner="runner")
     guard = enroll._compose_guard(app.raw["preset"])
-    assert "trusted_uid=$(id -u runner)" in guard
-    assert 'owner_only "$p" "$trusted_uid" /opt/app' in guard and "root_only_real" not in guard
+    assert "uid=$(id -u runner)" in guard and 'trusted_gid=""' in guard
+    assert 'owner_only "$p" /opt/app' in guard and "root_only_real" not in guard
 
 
-@pytest.mark.parametrize("bad", ["Runner", "x;id", "", 7, "rescue"])
+@pytest.mark.parametrize("bad", ["Runner", "x;id", "", 7, "rescue", [], ["runner", "rescue"]])
 def test_trusted_owner_must_be_a_user_name(bad):
     with pytest.raises(enroll.EnrollError):
         enroll._compose_guard({**COMPOSE, "trusted_owner": bad})
 
 
+@pytest.mark.parametrize(
+    "preset",
+    [
+        {"trusted_group": "ticketing"},
+        {"trusted_owner": "runner", "trusted_group": "x;id"},
+        {"trusted_owner": "runner", "trusted_group": "rescue"},
+    ],
+)
+def test_trusted_group_needs_owner_and_a_group_name(preset):
+    with pytest.raises(enroll.EnrollError):
+        enroll._compose_guard({**COMPOSE, **preset})
+
+
 # --- guard ejecutado en bash: árbol real en tmp, dueños y modos simulados -------------
 
-RUNNER_UID = "987"
+RUNNER_UID, DEPLOY_UID, TEAM_GID = "987", "988", "1002"
 FAKE_TOOLS = r"""
-stat() {  # stat -L -c %u|%a <ruta>: dueño y modo desde $TABLE (por defecto root 0755)
-  awk -v p="$4" -v f="$3" '$1 == p { v = (f == "%u") ? $2 : $3 }
-    END { print v ? v : (f == "%u" ? 0 : 755) }' "$TABLE"
+stat() {  # stat -L -c %u|%a|%g <ruta>: desde $TABLE (por defecto root:root 0755)
+  awk -v p="$4" -v f="$3" '$1 == p { v = (f == "%u") ? $2 : (f == "%a") ? $3 : $4 }
+    END { print v ? v : (f == "%a" ? 755 : 0) }' "$TABLE"
 }
-id() { echo """ + RUNNER_UID + r"""; }
+id() { awk -F: -v u="$2" '$1 == u { print $3; found = 1 } END { exit !found }' "$PASSWD"; }
+getent() { if [ "$1" = group ]; then grep "^$2:" "$GROUPS_DB"; else cat "$PASSWD"; fi; }
 """
+PASSWD = f"runner:x:{RUNNER_UID}:987::/:/bin/sh\ndeploy:x:{DEPLOY_UID}:988::/:/bin/sh\n"
 
 
-def run_guard(tmp_path, app, owners):
-    """Ejecuta los guards de remote_script sobre `app`; owners: ruta → (uid, modo)."""
+def run_guard(tmp_path, app, owners, groups=f"team:x:{TEAM_GID}:deploy,runner\n", passwd=PASSWD):
+    """Ejecuta los guards de remote_script sobre `app`; owners: ruta → (uid, modo[, gid])."""
     table = tmp_path / "table"
-    table.write_text("".join(f"{p} {u} {m}\n" for p, (u, m) in owners.items()))
+    rows = (f"{p} {' '.join(map(str, (*v, 0)[:3]))}\n" for p, v in owners.items())
+    table.write_text("".join(rows))
+    (tmp_path / "passwd").write_text(passwd)
+    (tmp_path / "group").write_text(groups)
     preset = app.raw["preset"]
-    trusted = enroll._trusted_owner(preset) is not None
+    trusted = bool(enroll._trusted(preset)[0])
     skip = frozenset(enroll._compose_paths(preset)) if trusted else frozenset()
     # /usr/bin/docker puede no existir aquí; su comprobación la cubren los tests de texto.
     sudo = enroll._sudo_guard(app.actions, skip).replace("root_only_real /usr/bin/docker\n", "")
@@ -269,7 +287,8 @@ def run_guard(tmp_path, app, owners):
         "set -euo pipefail\n", 'die() { echo "enroll: $*" >&2; exit 1; }\n', FAKE_TOOLS,
         enroll.ROOT_ONLY_FN, sudo, enroll._compose_guard(preset), 'echo "guard: ok"\n',
     ])  # fmt: skip
-    env = {"TABLE": str(table), "PATH": "/usr/bin:/bin"}
+    env = {"TABLE": str(table), "PASSWD": str(tmp_path / "passwd"),
+           "GROUPS_DB": str(tmp_path / "group"), "PATH": "/usr/bin:/bin"}  # fmt: skip
     return subprocess.run(
         ["bash", "-c", script], env=env, capture_output=True, text=True, check=False
     )
@@ -324,3 +343,48 @@ def test_bash_guard_rejects_a_dangling_compose_symlink_in_a_trusted_project(tmp_
     owners = {str(project): (RUNNER_UID, 755)}
     r = run_guard(tmp_path, app_at(project, trusted_owner="runner"), owners)
     assert r.returncode != 0 and "no existe" in r.stderr
+
+
+TEAM = {"trusted_owner": ["deploy", "runner"], "trusted_group": "team"}
+
+
+def team_tree(project):
+    return {
+        str(project): (DEPLOY_UID, 2775, TEAM_GID),
+        compose_file(project): (RUNNER_UID, 644, TEAM_GID),
+    }
+
+
+def test_bash_guard_accepts_a_group_writable_project_of_trusted_owners(tmp_path, project):
+    r = run_guard(tmp_path, app_at(project, **TEAM), team_tree(project))
+    assert r.returncode == 0, r.stderr
+
+
+def test_bash_guard_rejects_group_write_without_trusted_group(tmp_path, project):
+    app = app_at(project, trusted_owner=["deploy", "runner"])
+    r = run_guard(tmp_path, app, team_tree(project))
+    assert r.returncode != 0 and "escribible por grupo" in r.stderr
+
+
+def test_bash_guard_rejects_group_write_by_another_group(tmp_path, project):
+    tree = {**team_tree(project), str(project): (DEPLOY_UID, 2775, "1003")}
+    r = run_guard(tmp_path, app_at(project, **TEAM), tree)
+    assert r.returncode != 0 and "escribible por grupo" in r.stderr
+
+
+def test_bash_guard_rejects_a_trusted_group_with_an_untrusted_member(tmp_path, project):
+    groups = f"team:x:{TEAM_GID}:deploy,runner,alice\n"
+    r = run_guard(tmp_path, app_at(project, **TEAM), team_tree(project), groups)
+    assert r.returncode != 0 and "alice está en trusted_group" in r.stderr
+
+
+def test_bash_guard_rejects_a_user_whose_primary_group_is_the_trusted_group(tmp_path, project):
+    passwd = PASSWD + f"bob:x:1500:{TEAM_GID}::/:/bin/sh\n"
+    r = run_guard(tmp_path, app_at(project, **TEAM), team_tree(project), passwd=passwd)
+    assert r.returncode != 0 and "bob está en trusted_group" in r.stderr
+
+
+def test_bash_guard_never_allows_world_write_even_with_trusted_group(tmp_path, project):
+    tree = {**team_tree(project), compose_file(project): (RUNNER_UID, 666, TEAM_GID)}
+    r = run_guard(tmp_path, app_at(project, **TEAM), tree)
+    assert r.returncode != 0 and "escribible por grupo u otros" in r.stderr
