@@ -1,0 +1,37 @@
+[Unit]
+Description=Hermes Agent gateway (conversación en Slack, solo lectura)
+After=network-online.target tailscaled.service rescue-approver.service
+Wants=network-online.target
+
+[Service]
+User=agent
+Group=agent
+SupplementaryGroups=rescue-ipc
+Environment=HOME=/var/lib/rescue-agent
+Environment=HERMES_HOME=/var/lib/rescue-agent/.hermes
+Environment=XDG_STATE_HOME=/var/lib/rescue-agent/.hermes/state
+Environment=RESCUE_CONFIG=/etc/rescue-bot/config
+Environment=RESCUE_SOCKET=/run/rescue/approver.sock
+Environment=RESCUE_KEY_RO=/etc/rescue-bot/agent/key_ro
+EnvironmentFile=/etc/rescue-bot/agent/hermes.env
+WorkingDirectory=/var/lib/rescue-agent/.hermes/workspace
+ExecStart=/usr/local/bin/hermes gateway
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=210
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+# .hermes es root:agent 1775 (sticky): config.yaml, SOUL.md y plugins/ siguen siendo de root.
+ReadWritePaths=/var/lib/rescue-agent/.hermes
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

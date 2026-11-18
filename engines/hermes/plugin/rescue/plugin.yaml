@@ -1,0 +1,9 @@
+name: rescue
+version: 0.1.0
+description: Diagnóstico de solo lectura de apps y propuesta de acciones con aprobación humana
+provides_tools:
+  - list_apps
+  - get_runbook
+  - diagnose
+  - health
+  - request_action

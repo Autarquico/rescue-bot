@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Recarga la configuración privada en el CT y reinicia los servicios. Instalado por provision.sh
+# en /usr/local/sbin/rescue-reload (root, 0755). Sin argumentos.
+set -euo pipefail
+
+CONFIG=/etc/rescue-bot/config
+DEPLOY_KEY=/root/.ssh/config_deploy_key
+KNOWN_HOSTS=/root/.ssh/known_hosts_github
+
+[[ $EUID -eq 0 ]] || { echo "ejecuta como root" >&2; exit 1; }
+[[ $# -eq 0 ]] || { echo "uso: rescue-reload" >&2; exit 2; }
+
+GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS" git -C "$CONFIG" pull --ff-only
+chown -R root:root "$CONFIG"
+chmod -R u=rwX,go=rX "$CONFIG"
+# Canal de Slack de la config privada como home channel de Hermes (si no, avisa en cada conversación nueva).
+channel="$(/opt/hermes/hermes-agent/bin/python -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["slack"]["channel"])' "$CONFIG/settings.yaml")"
+[[ "$channel" =~ ^[CG][A-Z0-9]+$ ]] || { echo "slack.channel no válido en settings.yaml" >&2; exit 1; }
+install -d -m 0755 /etc/systemd/system/hermes-gateway.service.d
+printf '[Service]\nEnvironment=SLACK_HOME_CHANNEL=%s\n' "$channel" >/etc/systemd/system/hermes-gateway.service.d/home-channel.conf
+systemctl daemon-reload
+systemctl restart rescue-approver hermes-gateway

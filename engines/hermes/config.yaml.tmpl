@@ -1,0 +1,39 @@
+# Hermes Agent del CT rescue (usuario `agent`). Solo el toolset `rescue` está activo.
+# Re-verificar las claves exactas con `hermes tools list` al desplegar.
+model:
+  provider: deepseek
+  default: deepseek-v4-pro
+
+plugins:
+  enabled: [rescue]   # los plugins de Hermes son opt-in
+
+platform_toolsets:
+  slack: [rescue]
+
+agent:
+  disabled_toolsets:
+    - browser
+    - clarify
+    - code_execution
+    - cronjob
+    - debugging
+    - delegation
+    - file
+    - image_gen
+    - kanban
+    - memory
+    - messaging
+    - moa
+    - rl
+    - search
+    - session_search
+    - skills
+    - terminal
+    - todo
+    - tts
+    - video
+    - vision
+    - web
+
+slack:
+  require_mention: true

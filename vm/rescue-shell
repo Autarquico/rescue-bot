@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# rescue-shell <ro|rw> [actions.conf]
+#
+# Comando forzado de las dos claves SSH del usuario `rescue` (authorized_keys:
+# command="/usr/lib/rescue/rescue-shell ro|rw"). El modo lo fija SOLO esa línea.
+# El verbo llega en SSH_ORIGINAL_COMMAND y se busca en actions.conf, que solo
+# escribe `enroll` como root. Nada del cliente llega a un shell: el comando se
+# monta como array con los tokens de la línea del catálogo y se ejecuta directo.
+#
+# actions.conf: `verbo modo [sudo] argv0 arg1 ...`, tokens separados por espacios
+# (sin espacios dentro de un token), líneas `#` de comentario.
+#
+# El 2º argumento existe para los tests. RESCUE_SHELL_TESTING=1 relaja la
+# comprobación de propietario root. BASH_ENV/ENV no llegan: sshd solo acepta variables del
+# cliente con AcceptEnv (no se configura) y `restrict` desactiva ~/.ssh/environment y
+# PermitUserEnvironment. Lo que sí garantiza el entorno limpio del comando es `env -i` abajo.
+#
+# Salida: 64 = rechazado (nada se ejecutó), 70 = catálogo no fiable o sin timeout;
+# en otro caso, el código de salida del comando.
+
+set -u
+export LC_ALL=C
+
+readonly MAX_OUTPUT=65536
+readonly TIMEOUT_S=120
+readonly VERB_RE='^[a-z][a-z0-9_-]{0,31}$'
+
+if [[ ${RESCUE_SHELL_TESTING:-} != 1 ]]; then
+  export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+fi
+
+key_mode=${1:-}
+conf=${2:-/etc/rescue/actions.conf}
+verb=${SSH_ORIGINAL_COMMAND-}
+started=$(date +%s)
+
+log() {
+  local shown
+  printf -v shown '%q' "${verb:0:64}"
+  logger -t rescue-shell -- "verb=$shown key=${key_mode:0:8} $*" 2>/dev/null || true
+}
+
+fail() { # fail <código> <mensaje>
+  log "result=rejected($2) duration=$(($(date +%s) - started))s"
+  echo "rescue-shell: $2" >&2
+  exit "$1"
+}
+
+[[ $key_mode == ro || $key_mode == rw ]] || fail 64 "modo de clave inválido"
+[[ $verb != *$'\n'* && $verb =~ $VERB_RE ]] || fail 64 "verbo inválido"
+
+# Sondeo de `rescue-verify`: comprueba el modo de la clave sin ejecutar nada.
+if [[ $verb == probe-rw ]]; then
+  [[ $key_mode == rw ]] || fail 64 "verbo de escritura con clave de solo lectura"
+  echo "probe-rw ok"
+  exit 0
+fi
+
+[[ -f $conf ]] || fail 70 "catálogo no encontrado"
+read -r perms owner < <(stat -c '%a %u' "$conf" 2>/dev/null || stat -f '%Lp %u' "$conf" 2>/dev/null)
+[[ ${perms:-} =~ ^[0-7]+$ ]] || fail 70 "catálogo ilegible"
+((8#$perms & 8#022)) && fail 70 "catálogo escribible por grupo u otros"
+[[ ${owner:-} == 0 || ${RESCUE_SHELL_TESTING:-} == 1 ]] || fail 70 "catálogo no es de root"
+
+tokens=()
+while IFS= read -r line || [[ -n $line ]]; do
+  read -r -a fields <<<"$line"
+  if ((${#fields[@]} >= 3)) && [[ ${fields[0]} == "$verb" ]]; then
+    tokens=("${fields[@]}")
+    break
+  fi
+done <"$conf"
+
+((${#tokens[@]})) || fail 64 "verbo desconocido"
+action_mode=${tokens[1]}
+[[ $action_mode == ro || $action_mode == rw ]] || fail 70 "línea de catálogo inválida"
+if [[ $action_mode == rw && $key_mode == ro ]]; then
+  fail 64 "verbo de escritura con clave de solo lectura"
+fi
+
+cmd=("${tokens[@]:2}")
+if [[ ${cmd[0]} == sudo ]]; then
+  cmd=(sudo -n "${cmd[@]:1}")
+  exe=${cmd[2]:-}
+else
+  exe=${cmd[0]}
+fi
+[[ $exe == /* ]] || fail 70 "línea de catálogo inválida"
+
+timeout_bin=$(command -v timeout || command -v gtimeout) || fail 70 "falta timeout"
+
+# Entorno mínimo y fijo: nada del cliente ni de sshd llega al comando.
+env -i PATH="$PATH" LANG=C.UTF-8 \
+  "$timeout_bin" -k 5 "$TIMEOUT_S" "${cmd[@]}" 2>&1 </dev/null | head -c "$MAX_OUTPUT"
+rc=${PIPESTATUS[0]}
+log "result=exit$rc mode=$action_mode duration=$(($(date +%s) - started))s"
+exit "$rc"

@@ -1,0 +1,11 @@
+# Ajustes del bot. Datos ficticios: la configuración real vive en un repo privado.
+slack:
+  channel: C0000000000          # ID del canal privado #rescue
+  approvers: [U0000000000]      # Member IDs de Slack que pueden aprobar
+rescue_host:
+  tailscale_ip: 100.64.0.10     # IP Tailscale del CT rescue (from= en authorized_keys)
+  ssh: root@rescue.example.ts.net
+limits:
+  min_interval_s: 300
+  max_per_hour: 3
+  approval_ttl_s: 600

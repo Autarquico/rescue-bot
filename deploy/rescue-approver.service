@@ -1,0 +1,34 @@
+[Unit]
+Description=rescue-bot approver (aprobaciones de Slack y ejecución con clave rw)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=approver
+Group=rescue-ipc
+RuntimeDirectory=rescue
+RuntimeDirectoryMode=0750
+EnvironmentFile=/etc/rescue-bot/approver/slack.env
+Environment=RESCUE_CONFIG=/etc/rescue-bot/config
+Environment=RESCUE_SOCKET=/run/rescue/approver.sock
+Environment=RESCUE_KEY_RW=/etc/rescue-bot/approver/key_rw
+Environment=RESCUE_AUDIT=/var/log/rescue/audit.jsonl
+Environment=RESCUE_AGENT_USER=agent
+ExecStart=/opt/rescue-bot/.venv/bin/rescue-approver
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log/rescue
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+# App de Slack «rescue»: conversación con el agente (Hermes). Socket Mode, sin endpoint público.
+display_information:
+  name: rescue
+  description: Diagnóstico de apps caídas (solo lectura)
+features:
+  bot_user:
+    display_name: rescue
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - channels:history
+      - groups:history
+      - users:read
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.groups
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
