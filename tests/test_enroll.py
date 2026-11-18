@@ -266,18 +266,27 @@ stat() {  # stat -L -c %u|%a|%g <ruta>: desde $TABLE (por defecto root:root 0755
     END { print v ? v : (f == "%a" ? 755 : 0) }' "$TABLE"
 }
 id() { awk -F: -v u="$2" '$1 == u { print $3; found = 1 } END { exit !found }' "$PASSWD"; }
-getent() { if [ "$1" = group ]; then grep "^$2:" "$GROUPS_DB"; else cat "$PASSWD"; fi; }
+ls() {  # ls -ldL <ruta>: "+" en la columna 11 si $TABLE marca la ruta con acl
+  awk -v p="$2" '$1 == p && $5 == "acl" { a = "+" }
+    END { printf "drwxr-xr-x%s 1 x\\n", a ? a : " " }' "$TABLE"
+}
 """
 PASSWD = f"runner:x:{RUNNER_UID}:987::/:/bin/sh\ndeploy:x:{DEPLOY_UID}:988::/:/bin/sh\n"
 
 
-def run_guard(tmp_path, app, owners, groups=f"team:x:{TEAM_GID}:deploy,runner\n", passwd=PASSWD):
+def run_guard(
+    tmp_path, app, owners, groups=f"team:x:{TEAM_GID}:deploy,runner\n", passwd=PASSWD,
+    nsswitch="passwd: files systemd\ngroup: files systemd\n",
+):  # fmt: skip
     """Ejecuta los guards de remote_script sobre `app`; owners: ruta → (uid, modo[, gid])."""
     table = tmp_path / "table"
-    rows = (f"{p} {' '.join(map(str, (*v, 0)[:3]))}\n" for p, v in owners.items())
+    rows = (f"{p} {' '.join(map(str, (*v, 0, '-')[:4]))}\n" for p, v in owners.items())
     table.write_text("".join(rows))
-    (tmp_path / "passwd").write_text(passwd)
-    (tmp_path / "group").write_text(groups)
+    etc = tmp_path / "etc"
+    etc.mkdir(exist_ok=True)
+    (etc / "passwd").write_text(passwd)
+    (etc / "group").write_text(groups)
+    (etc / "nsswitch.conf").write_text(nsswitch)
     preset = app.raw["preset"]
     trusted = bool(enroll._trusted(preset)[0])
     skip = frozenset(enroll._compose_paths(preset)) if trusted else frozenset()
@@ -285,10 +294,10 @@ def run_guard(tmp_path, app, owners, groups=f"team:x:{TEAM_GID}:deploy,runner\n"
     sudo = enroll._sudo_guard(app.actions, skip).replace("root_only_real /usr/bin/docker\n", "")
     script = "".join([
         "set -euo pipefail\n", 'die() { echo "enroll: $*" >&2; exit 1; }\n', FAKE_TOOLS,
-        enroll.ROOT_ONLY_FN, sudo, enroll._compose_guard(preset), 'echo "guard: ok"\n',
+        enroll.ROOT_ONLY_FN, sudo, enroll._compose_guard(preset).replace(" /etc/", f" {etc}/"),
+        'echo "guard: ok"\n',
     ])  # fmt: skip
-    env = {"TABLE": str(table), "PASSWD": str(tmp_path / "passwd"),
-           "GROUPS_DB": str(tmp_path / "group"), "PATH": "/usr/bin:/bin"}  # fmt: skip
+    env = {"TABLE": str(table), "PASSWD": str(etc / "passwd"), "PATH": "/usr/bin:/bin"}
     return subprocess.run(
         ["bash", "-c", script], env=env, capture_output=True, text=True, check=False
     )
@@ -382,6 +391,29 @@ def test_bash_guard_rejects_a_user_whose_primary_group_is_the_trusted_group(tmp_
     passwd = PASSWD + f"bob:x:1500:{TEAM_GID}::/:/bin/sh\n"
     r = run_guard(tmp_path, app_at(project, **TEAM), team_tree(project), passwd=passwd)
     assert r.returncode != 0 and "bob está en trusted_group" in r.stderr
+
+
+def test_bash_guard_counts_every_group_entry_with_the_same_gid(tmp_path, project):
+    groups = f"team:x:{TEAM_GID}:deploy,runner\nshadow:x:{TEAM_GID}:alice\n"
+    r = run_guard(tmp_path, app_at(project, **TEAM), team_tree(project), groups)
+    assert r.returncode != 0 and "alice está en trusted_group" in r.stderr
+
+
+def test_bash_guard_requires_local_only_nss_for_a_trusted_group(tmp_path, project):
+    nss = "passwd: files sss\ngroup: files sss\n"
+    r = run_guard(tmp_path, app_at(project, **TEAM), team_tree(project), nsswitch=nss)
+    assert r.returncode != 0 and "ficheros locales" in r.stderr
+
+
+def test_bash_guard_reports_a_missing_trusted_group(tmp_path, project):
+    r = run_guard(tmp_path, app_at(project, **TEAM), team_tree(project), groups="other:x:5:\n")
+    assert r.returncode != 0 and "trusted_group team no existe" in r.stderr
+
+
+def test_bash_guard_rejects_an_extended_acl_inside_the_project(tmp_path, project):
+    tree = {**team_tree(project), compose_file(project): (RUNNER_UID, 664, TEAM_GID, "acl")}
+    r = run_guard(tmp_path, app_at(project, **TEAM), tree)
+    assert r.returncode != 0 and "ACL extendida" in r.stderr
 
 
 def test_bash_guard_never_allows_world_write_even_with_trusted_group(tmp_path, project):

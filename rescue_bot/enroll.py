@@ -160,6 +160,7 @@ owner_only() {
         *" $u "*) ;;
         *) die "$p no es de root ni de un dueño de confianza" ;;
       esac
+      if [ "$(ls -ldL "$p" | cut -c11)" = + ]; then die "$p tiene ACL extendida"; fi
       m=022
       [ -n "$trusted_gid" ] && [ "$(stat -L -c %g "$p")" = "$trusted_gid" ] && m=002
       [ $(( 8#$(stat -L -c %a "$p") & 8#$m )) = 0 ] || die "$p escribible por grupo u otros"
@@ -241,21 +242,39 @@ def _compose_paths(preset: dict) -> list[str]:
     return [directory, *(f"{directory}/{name}" for name in names)]
 
 
+NSS_LOCAL_ONLY = (
+    "awk '$1 == \"passwd:\" || $1 == \"group:\" { n++; for (i = 2; i <= NF; i++) "
+    "if ($i != \"files\" && $i != \"systemd\") bad = 1 } END { exit bad || n != 2 }' "
+    "/etc/nsswitch.conf"
+)
+
+
 def _trusted_prologue(owners: tuple[str, ...], group: str | None) -> str:
     lines = ['trusted_uids=""', 'trusted_gid=""']
     for o in owners:
         lines.append(f'uid=$(id -u {o}) || die "trusted_owner {o} no existe"')
         lines.append('trusted_uids="$trusted_uids $uid"')
     if group:
+        # Miembros por gid en ficheros locales: un nombre repetido, otro grupo con el mismo gid
+        # o usuarios de LDAP/SSSD que getent no enumera quedarían fuera del recuento.
         names = " ".join(owners)
         lines += [
-            f'trusted_gid=$(getent group {group} | cut -d: -f3)',
-            f'[ -n "$trusted_gid" ] || die "trusted_group {group} no existe"',
-            f'for m in $(getent group {group} | cut -d: -f4 | tr , " ") '
-            f"$(getent passwd | awk -F: -v g=\"$trusted_gid\" '$4 == g {{print $1}}'); do",
+            f"{NSS_LOCAL_ONLY} "
+            '|| die "trusted_group exige passwd y group solo de ficheros locales"',
+            f"trusted_gid=$(awk -F: -v g={group} '$1 == g {{ print $3 }}' /etc/group) "
+            f'|| die "no se pudo leer /etc/group"',
+            f'[[ "$trusted_gid" =~ ^[0-9]+$ ]] '
+            f'|| die "trusted_group {group} no existe o está repetido"',
+            "members=$(awk -F: -v g=\"$trusted_gid\" "
+            "'$3 == g { gsub(\",\", \" \", $4); print $4 }' /etc/group "
+            "&& awk -F: -v g=\"$trusted_gid\" '$4 == g { print $1 }' /etc/passwd) "
+            '|| die "no se pudieron leer /etc/group y /etc/passwd"',
+            "set -f",
+            "for m in $members; do",
             f'  case " {names} " in *" $m "*) ;; '
             f'*) die "$m está en trusted_group {group} y no es trusted_owner" ;; esac',
             "done",
+            "set +f",
         ]
     return "\n".join(lines) + "\n"
 
