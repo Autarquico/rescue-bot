@@ -243,7 +243,8 @@ def _compose_paths(preset: dict) -> list[str]:
 
 
 NSS_LOCAL_ONLY = (
-    "awk '$1 == \"passwd:\" || $1 == \"group:\" { n++; for (i = 2; i <= NF; i++) "
+    "awk '$1 == \"passwd:\" || $1 == \"group:\" { n++ } "
+    "$1 ~ /^(passwd|group|initgroups):$/ { for (i = 2; i <= NF; i++) "
     "if ($i != \"files\" && $i != \"systemd\") bad = 1 } END { exit bad || n != 2 }' "
     "/etc/nsswitch.conf"
 )

@@ -405,6 +405,12 @@ def test_bash_guard_requires_local_only_nss_for_a_trusted_group(tmp_path, projec
     assert r.returncode != 0 and "ficheros locales" in r.stderr
 
 
+def test_bash_guard_checks_initgroups_too(tmp_path, project):
+    nss = "passwd: files systemd\ngroup: files systemd\ninitgroups: files sss\n"
+    r = run_guard(tmp_path, app_at(project, **TEAM), team_tree(project), nsswitch=nss)
+    assert r.returncode != 0 and "ficheros locales" in r.stderr
+
+
 def test_bash_guard_reports_a_missing_trusted_group(tmp_path, project):
     r = run_guard(tmp_path, app_at(project, **TEAM), team_tree(project), groups="other:x:5:\n")
     assert r.returncode != 0 and "trusted_group team no existe" in r.stderr
