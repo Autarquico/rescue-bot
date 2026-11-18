@@ -214,3 +214,20 @@ def test_app_names_match_the_ct_verify_pattern():
     for bad in ["My.App", "-x", "a" * 33, "1app"]:
         with _pytest.raises(AddAppError):
             render_ficha(bad, {"preset": "systemd", "target": "web.service"})
+
+
+def test_ficha_carries_compose_file_and_trusted_owner():
+    import yaml
+
+    from rescue_bot.add_app import render_ficha
+
+    values = {
+        "preset": "docker-compose", "target": "/opt/app", "file": "docker-compose.prod.yml",
+        "trusted_owner": "runner", "url": "https://app.example", "health_url": "https://app.example/health",
+        "expect": "200", "host": "app.example.ts.net", "admin": "root",
+    }  # fmt: skip
+    preset = yaml.safe_load(render_ficha("app", values))["preset"]
+    assert preset == {
+        "kind": "docker-compose", "dir": "/opt/app",
+        "file": "docker-compose.prod.yml", "trusted_owner": "runner",
+    }  # fmt: skip

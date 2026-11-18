@@ -59,6 +59,9 @@ def render_ficha(name: str, values: Mapping[str, str | None]) -> str:
         raise AddAppError(f"nombre de app inválido: {name!r}")
     preset = {"kind": values["preset"]}
     preset["unit" if values["preset"] == "systemd" else "dir"] = values["target"]
+    for key in ("file", "trusted_owner"):
+        if values.get(key):
+            preset[key] = values[key]
     ficha = {
         "name": name,
         "url": values["url"],
@@ -189,6 +192,8 @@ def _collect(args: argparse.Namespace, console: Console) -> dict[str, str | None
         "url": args.url or console.ask("URL pública", origin),
         "admin": args.admin,
         "rollback_cmd": args.rollback_cmd,
+        "file": args.file,
+        "trusted_owner": args.trusted_owner,
     }
 
 
@@ -267,6 +272,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--preset", choices=["systemd", "docker-compose"])
     p.add_argument("--unit")
     p.add_argument("--dir")
+    p.add_argument("--file", help="docker-compose: fichero compose no estándar dentro de --dir")
+    p.add_argument(
+        "--trusted-owner",
+        help="docker-compose: usuario (ya equivalente a root) admitido como dueño del proyecto",
+    )
     p.add_argument("--health-url")
     p.add_argument("--expect", type=int, default=200)
     p.add_argument("--url")

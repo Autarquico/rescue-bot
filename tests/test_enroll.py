@@ -183,3 +183,136 @@ def test_sudo_argument_that_does_not_exist_yet_is_checked_through_its_ancestor()
 def test_sudo_rejects_paths_it_cannot_check(arg):
     with pytest.raises(enroll.EnrollError):
         enroll.sudo_paths([Action("fix", "rw", ("/bin/bash", arg), True)])
+
+
+COMPOSE = {"kind": "docker-compose", "dir": "/opt/app", "file": "docker-compose.prod.yml"}
+
+
+def compose_app(vm_actions=(), **preset):
+    from types import SimpleNamespace
+
+    from rescue_bot.presets import actions_for
+
+    raw = {"preset": {**COMPOSE, **preset}, "vm_actions": list(vm_actions)}
+    return SimpleNamespace(raw=raw, actions=actions_for(raw))
+
+
+def test_compose_preset_uses_the_declared_file():
+    restart = next(a for a in compose_app().actions if a.verb == "restart")
+    assert restart.argv == (
+        "/usr/bin/docker", "compose", "--project-directory", "/opt/app",
+        "-f", "/opt/app/docker-compose.prod.yml", "restart",
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("bad", ["../etc/passwd", "sub/x.yml", ".hidden", ""])
+def test_compose_file_must_be_a_plain_name(bad):
+    from rescue_bot.presets import PresetError
+
+    with pytest.raises(PresetError):
+        compose_app(file=bad)
+
+
+def test_compose_project_must_be_root_owned_by_default():
+    app = compose_app()
+    guard = enroll._compose_guard(app.raw["preset"])
+    assert 'root_only_real "$p"' in guard and "owner_only" not in guard
+    assert "/opt/app/docker-compose.prod.yml" in guard
+    assert "root_only_path /opt/app/docker-compose.prod.yml\n" in enroll._sudo_guard(app.actions)
+
+
+def test_remote_script_skips_sudo_checks_only_for_a_trusted_project():
+    files = {path: ("x", "0644") for path in (enroll.SHELL_PATH, enroll.RESOURCES_PATH,
+             enroll.ACTIONS_PATH, enroll.SUDOERS_PATH, enroll.KEYS_PATH)}  # fmt: skip
+    plain = enroll.remote_script(compose_app(), files)
+    trusted = enroll.remote_script(compose_app(trusted_owner="runner"), files)
+    assert "root_only_path /opt/app\n" in plain
+    assert "root_only_path /opt/app" not in trusted
+    assert "root_only_real /usr/bin/docker\n" in trusted
+
+
+def test_trusted_owner_relaxes_only_the_compose_project():
+    app = compose_app(trusted_owner="runner")
+    guard = enroll._compose_guard(app.raw["preset"])
+    assert "trusted_uid=$(id -u runner)" in guard
+    assert 'owner_only "$p" "$trusted_uid" /opt/app' in guard and "root_only_real" not in guard
+
+
+@pytest.mark.parametrize("bad", ["Runner", "x;id", "", 7, "rescue"])
+def test_trusted_owner_must_be_a_user_name(bad):
+    with pytest.raises(enroll.EnrollError):
+        enroll._compose_guard({**COMPOSE, "trusted_owner": bad})
+
+
+# --- guard ejecutado en bash: árbol real en tmp, dueños y modos simulados -------------
+
+RUNNER_UID = "987"
+FAKE_TOOLS = r"""
+stat() {  # stat -L -c %u|%a <ruta>: dueño y modo desde $TABLE (por defecto root 0755)
+  awk -v p="$4" -v f="$3" '$1 == p { v = (f == "%u") ? $2 : $3 }
+    END { print v ? v : (f == "%u" ? 0 : 755) }' "$TABLE"
+}
+id() { echo """ + RUNNER_UID + r"""; }
+"""
+
+
+def run_guard(tmp_path, app, owners):
+    """Ejecuta los guards de remote_script sobre `app`; owners: ruta → (uid, modo)."""
+    table = tmp_path / "table"
+    table.write_text("".join(f"{p} {u} {m}\n" for p, (u, m) in owners.items()))
+    preset = app.raw["preset"]
+    trusted = enroll._trusted_owner(preset) is not None
+    skip = frozenset(enroll._compose_paths(preset)) if trusted else frozenset()
+    # /usr/bin/docker puede no existir aquí; su comprobación la cubren los tests de texto.
+    sudo = enroll._sudo_guard(app.actions, skip).replace("root_only_real /usr/bin/docker\n", "")
+    script = "".join([
+        "set -euo pipefail\n", 'die() { echo "enroll: $*" >&2; exit 1; }\n', FAKE_TOOLS,
+        enroll.ROOT_ONLY_FN, sudo, enroll._compose_guard(preset), 'echo "guard: ok"\n',
+    ])  # fmt: skip
+    env = {"TABLE": str(table), "PATH": "/usr/bin:/bin"}
+    return subprocess.run(
+        ["bash", "-c", script], env=env, capture_output=True, text=True, check=False
+    )
+
+
+@pytest.fixture
+def project(tmp_path):
+    root = (tmp_path / "opt" / "app").resolve()
+    (root / "scripts").mkdir(parents=True)
+    (root / "docker-compose.prod.yml").write_text("services: {}\n")
+    (root / "scripts" / "fix.sh").write_text("#!/bin/sh\n")
+    return root
+
+
+def compose_file(project):
+    return f"{project}/docker-compose.prod.yml"
+
+
+def app_at(project, **kw):
+    return compose_app(dir=str(project), **kw)
+
+
+def test_bash_guard_accepts_a_project_owned_by_the_trusted_user(tmp_path, project):
+    owners = {str(project): (RUNNER_UID, 755), compose_file(project): (RUNNER_UID, 644)}
+    r = run_guard(tmp_path, app_at(project, trusted_owner="runner"), owners)
+    assert r.returncode == 0, r.stderr
+
+
+def test_bash_guard_rejects_the_same_project_without_trusted_owner(tmp_path, project):
+    owners = {str(project): (RUNNER_UID, 755), compose_file(project): (RUNNER_UID, 644)}
+    r = run_guard(tmp_path, app_at(project), owners)
+    assert r.returncode != 0 and "no es de root" in r.stderr
+
+
+def test_bash_guard_rejects_compose_file_of_another_user(tmp_path, project):
+    owners = {str(project): (RUNNER_UID, 755), compose_file(project): ("1000", 644)}
+    r = run_guard(tmp_path, app_at(project, trusted_owner="runner"), owners)
+    assert r.returncode != 0 and "dueño de confianza" in r.stderr
+
+
+def test_bash_guard_still_checks_other_sudo_paths_inside_a_trusted_project(tmp_path, project):
+    fix = f"{project}/scripts/fix.sh"
+    vm = [{"verb": "fix", "mode": "rw", "command": ["/bin/bash", fix], "sudo": True}]
+    owners = {str(project): (RUNNER_UID, 755), fix: ("1000", 666)}
+    r = run_guard(tmp_path, app_at(project, trusted_owner="runner", vm_actions=vm), owners)
+    assert r.returncode != 0 and fix in r.stderr

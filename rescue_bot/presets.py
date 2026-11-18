@@ -17,6 +17,7 @@ VERB_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 ARG_RE = re.compile(r"[A-Za-z0-9@%+./_-]+")
 ABS_PATH_RE = re.compile(r"/[A-Za-z0-9._/-]+")
 UNIT_RE = re.compile(r"[A-Za-z0-9@._-]+")
+FILE_NAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
 MODES = ("ro", "rw")
 RESOURCES = ("/usr/lib/rescue/resources.sh",)
 
@@ -48,12 +49,10 @@ def _systemd(params: dict) -> list[Action]:
 
 
 def _docker_compose(params: dict) -> list[Action]:
-    compose = (
-        "/usr/bin/docker",
-        "compose",
-        "--project-directory",
-        _param(params, "dir", ABS_PATH_RE),
-    )
+    directory = _param(params, "dir", ABS_PATH_RE)
+    compose: tuple[str, ...] = ("/usr/bin/docker", "compose", "--project-directory", directory)
+    if "file" in params:  # fichero compose con nombre no estándar, p. ej. docker-compose.prod.yml
+        compose += ("-f", f"{directory}/{_param(params, 'file', FILE_NAME_RE)}")
     return [
         Action("status", "ro", (*compose, "ps"), sudo=True),
         Action("logs", "ro", (*compose, "logs", "--no-color", "--tail", "200"), sudo=True),

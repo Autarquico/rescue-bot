@@ -148,6 +148,19 @@ root_only_real() {  # idem sobre la ruta original y sobre su destino si es un en
   root_only "$1"
   root_only "$(readlink -f "$1")"
 }
+owner_only() {  # <ruta> <uid> <dir>: dentro de <dir>, de root o <uid> sin g/o-w; fuera, root_only
+  local p u
+  for p in "$1" "$(readlink -f "$1")"; do
+    [ -e "$p" ] || die "$p no existe"
+    while [ "$p" = "$3" ] || [ "${p#"$3"/}" != "$p" ]; do
+      u=$(stat -L -c %u "$p")
+      [ "$u" = 0 ] || [ "$u" = "$2" ] || die "$p no es de root ni del dueño de confianza"
+      [ $(( 8#$(stat -L -c %a "$p") & 8#022 )) = 0 ] || die "$p escribible por grupo u otros"
+      p=$(dirname "$p")
+    done
+    root_only "$p"
+  done
+}
 root_only_path() {  # ruta que puede no existir aún: su primer ancestro existente debe ser de root
   p="$1"
   while [ ! -e "$p" ] && [ ! -L "$p" ]; do p=$(dirname "$p"); done
@@ -183,30 +196,62 @@ def sudo_paths(actions: Sequence[Action]) -> list[str]:
     )
 
 
-def _sudo_guard(actions: Sequence[Action]) -> str:
+def _sudo_guard(actions: Sequence[Action], skip: frozenset[str] = frozenset()) -> str:
+    """`skip`: rutas exactas que ya comprueba el guard del proyecto compose de confianza."""
     exes = set(sudo_executables(actions))
     lines = []
     for path in sudo_paths(actions):
+        if path in skip and path not in exes:
+            continue
         q = shlex.quote(path)
         # argv[0] debe existir; un argumento absoluto que aún no existe no puede crearlo la app.
         lines.append(f"root_only_real {q}\n" if path in exes else f"root_only_path {q}\n")
     return "".join(lines)
 
 
-def _compose_guard(directory: str) -> str:
-    files = " ".join(shlex.quote(f"{directory}/{name}") for name in COMPOSE_FILES)
-    return f"""
-root_only_real {shlex.quote(directory)}
-for p in {files}; do
-  [ -e "$p" ] || continue
-  root_only_real "$p"
+def _trusted_owner(preset: dict) -> str | None:
+    owner = preset.get("trusted_owner")
+    if owner is None:
+        return None
+    if not isinstance(owner, str) or not USER_RE.fullmatch(owner) or owner == "rescue":
+        raise EnrollError("`trusted_owner` no válido (nunca `rescue`)")
+    return owner
+
+
+def _compose_paths(preset: dict) -> list[str]:
+    directory = preset["dir"]
+    names = (*COMPOSE_FILES, preset["file"]) if "file" in preset else COMPOSE_FILES
+    return [directory, *(f"{directory}/{name}" for name in names)]
+
+
+def _compose_guard(preset: dict) -> str:
+    """El proyecto compose lo lee root vía sudo: sus ficheros no pueden ser de cualquiera.
+
+    `trusted_owner` (opcional en la ficha) admite además a ese usuario como dueño del
+    directorio y sus ficheros: solo tiene sentido si ya equivale a root (p. ej. sudo ALL).
+    """
+    directory = shlex.quote(preset["dir"])
+    paths = " ".join(shlex.quote(p) for p in _compose_paths(preset))
+    owner = _trusted_owner(preset)
+    if owner is None:
+        check, prologue = 'root_only_real "$p"', ""
+    else:
+        check = f'owner_only "$p" "$trusted_uid" {directory}'
+        prologue = f'trusted_uid=$(id -u {owner}) || die "trusted_owner {owner} no existe"\n'
+    return f"""{prologue}
+for p in {paths}; do
+  [ -e "$p" ] || [ "$p" = {directory} ] || continue
+  {check}
 done
 """
 
 
 def remote_script(app: App, files: dict[str, tuple[str, str]]) -> str:
-    kind = (app.raw.get("preset") or {}).get("kind")
-    guard = _compose_guard(app.raw["preset"]["dir"]) if kind == "docker-compose" else ""
+    preset = app.raw.get("preset") or {}
+    compose = preset.get("kind") == "docker-compose"
+    guard = _compose_guard(preset) if compose else ""
+    trusted = compose and _trusted_owner(preset) is not None
+    skip = frozenset(_compose_paths(preset)) if trusted else frozenset()
 
     def put(path: str, content: str, mode: str) -> str:
         return (
@@ -220,7 +265,7 @@ def remote_script(app: App, files: dict[str, tuple[str, str]]) -> str:
         'die() { echo "enroll: $*" >&2; exit 1; }\n',
         ROOT_ONLY_FN,
         "tmp=$(mktemp); trap 'rm -f \"$tmp\"' EXIT\n",
-        _sudo_guard(app.actions),
+        _sudo_guard(app.actions, skip),
         guard,
         "id rescue >/dev/null 2>&1 || useradd --system --home-dir /home/rescue "
         "--no-create-home --shell /bin/bash rescue\n",
